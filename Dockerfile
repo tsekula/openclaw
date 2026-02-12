@@ -29,11 +29,14 @@ RUN echo "node ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 USER node
 RUN /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# Install only the specific tap/tool via Brew
-RUN brew install steipete/tap/gogcli
+# Install tools via Brew
+RUN brew install steipete/tap/gogcli uv
+
+# Install ClawHub CLI globally
+USER root
+RUN npm install -g clawhub
 
 # 4. OpenClaw Build Process
-USER root
 WORKDIR /app
 RUN corepack enable
 
