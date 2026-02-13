@@ -55,6 +55,7 @@ services:
       - ${OPENCLAW_CONFIG_DIR}/gh_config:/home/node/.config/gh # GitHub CLI settings
       - ${OPENCLAW_CONFIG_DIR}/op_config:/home/node/.config/op # 1Password CLI settings
       - ${OPENCLAW_CONFIG_DIR}/ssh:/home/node/.ssh:ro # Read-only SSH keys for Git pushes
+      - /var/run/docker.sock:/var/run/docker.sock # to fix spawn docker error
     init: true
     restart: unless-stopped
     command:
