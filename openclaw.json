@@ -41,6 +41,7 @@
           "alias": "OpenRouter"
         },
         "openrouter/minimax/minimax-m2.7": {},
+        "openrouter/deepseek/deepseek-v4-pro": {},
         "openrouter/xiaomi/mimo-v2-pro": {},
         "openrouter/z-ai/glm-5.1": {}
       },
