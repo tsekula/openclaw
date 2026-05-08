@@ -1,12 +1,12 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.4.11",
-    "lastTouchedAt": "2026-04-12T08:31:21.712Z"
+    "lastTouchedAt": "2026-05-08T15:39:46.778Z"
   },
   "wizard": {
-    "lastRunAt": "2026-02-07T16:02:46.036Z",
-    "lastRunVersion": "2026.2.6-3",
-    "lastRunCommand": "onboard",
+    "lastRunAt": "2026-05-08T15:35:50.062Z",
+    "lastRunVersion": "2026.4.11",
+    "lastRunCommand": "doctor",
     "lastRunMode": "local"
   },
   "browser": {
@@ -33,7 +33,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openrouter/minimax/minimax-m2.7"
+        "primary": "openrouter/minimax-m2.7"
       },
       "thinkingDefault": "minimal",
       "models": {
@@ -62,6 +62,10 @@
           "headless": true,
           "enableNoVnc": false,
           "autoStart": true
+        },
+        "docker": {
+          "workdir": "/ws",
+          "readOnlyRoot": false
         }
       }
     },
@@ -82,6 +86,7 @@
             "tts",
             "canvas",
             "web_fetch",
+            "web_search",
             "memory_search",
             "memory_get",
             "group:runtime",
@@ -117,7 +122,8 @@
             "memory_search",
             "memory_get",
             "group:runtime",
-            "group:fs"
+            "group:fs",
+            "web_search"
           ]
         }
       },
@@ -142,7 +148,8 @@
             "memory_search",
             "memory_get",
             "group:runtime",
-            "group:fs"
+            "group:fs",
+            "web_search"
           ]
         }
       },
@@ -166,14 +173,20 @@
             "memory_search",
             "memory_get",
             "group:runtime",
-            "group:fs"
+            "group:fs",
+            "web_search"
           ]
         }
       }
     ]
   },
   "tools": {
-    "deny": []
+    "deny": [],
+    "web": {
+      "search": {
+        "provider": "brave"
+      }
+    }
   },
   "bindings": [
     {
@@ -292,6 +305,12 @@
       },
       "browser": {
         "enabled": true
+      },
+      "brave": {
+        "enabled": true,
+        "config": {
+          "webSearch": {}
+        }
       }
     }
   }
