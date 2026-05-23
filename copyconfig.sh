@@ -30,7 +30,7 @@ SKILLS_TARGET="${CONFIG_DIR}/workspace/skills"
 if [[ -d "${SKILLS_SOURCE}" ]]; then
     mkdir -p "${SKILLS_TARGET}"
     echo "Syncing ${SKILLS_SOURCE}/ to ${SKILLS_TARGET}/"
-    rsync -a --delete "${SKILLS_SOURCE}/" "${SKILLS_TARGET}/"
+    rsync -a "${SKILLS_SOURCE}/" "${SKILLS_TARGET}/"
 fi
 
 echo "✓ Configuration updated successfully"
