@@ -33,18 +33,20 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openrouter/minimax-m2.7"
+        "primary": "openrouter/deepseek/deepseek-v4-flash"
       },
       "thinkingDefault": "minimal",
+      "imageModel": {
+        "primary": "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "fallbacks": ["openrouter/google/gemma-4-26b-a4b-it"]
+      },
       "models": {
-        "openrouter/auto": {
-          "alias": "OpenRouter"
-        },
         "openrouter/minimax/minimax-m2.7": {},
         "openrouter/deepseek/deepseek-v4-pro": {},
         "openrouter/deepseek/deepseek-v4-flash": {},
         "openrouter/qwen/qwen3.6-flash": {},
-        "openrouter/xiaomi/mimo-v2.5-pro": {}
+        "openrouter/xiaomi/mimo-v2.5-pro": {},
+        "openrouter/~moonshotai/kimi-latest": {}
       },
       "workspace": "/home/node/.openclaw/workspace",
       "compaction": {
@@ -52,7 +54,11 @@
       },
       "maxConcurrent": 4,
       "subagents": {
-        "maxConcurrent": 8
+	"allowAgents": ["vision-operator"],
+        "runTimeoutSeconds": 900,
+	"archiveAfterMinutes": 60,
+        "maxConcurrent": 8,
+        "maxSpawnDepth": 2
       },
       "sandbox": {
         "mode": "non-main",
@@ -66,7 +72,7 @@
           "autoStart": true
         },
         "docker": {
-          "workdir": "/ws",
+          "workdir": "/workspace",
           "readOnlyRoot": false
         }
       }
@@ -76,6 +82,9 @@
         "id": "main",
         "default": true,
         "workspace": "/home/node/.openclaw/workspace",
+        "subagents": {
+          "allowAgents": ["vision-operator"]
+        },
         "tools": {
           "allow": [
             "sessions_send",
@@ -97,11 +106,47 @@
         }
       },
       {
+        "id": "vision-operator",
+        "model": {
+          "primary": "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+        },
+        "tools": {
+          "profile": "coding"
+        },
+        "sandbox": {
+          "mode": "all",
+          "workspaceAccess": "rw",
+          "docker": {
+            "binds": ["/home/node/.openclaw/media:/home/node/.openclaw/media:ro"],
+            "dangerouslyAllowExternalBindSources": true
+          }
+        }
+      },
+      {
         "id": "vision",
         "name": "vision",
         "workspace": "/home/node/.openclaw/workspace-vision",
         "agentDir": "/home/node/.openclaw/agents/vision/agent",
-        "model": "openrouter/google/gemma-4-31b-it"
+        "model": "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+        "tools": {
+          "allow": [
+            "sessions_send",
+            "sessions_spawn",
+            "sessions_list",
+            "sessions_history",
+            "agents_list",
+            "browser",
+            "message",
+            "tts",
+            "canvas",
+            "web_fetch",
+            "web_search",
+            "memory_search",
+            "memory_get",
+            "group:runtime",
+            "group:fs"
+          ]
+        }
       },
       {
         "id": "life-coach",
@@ -134,7 +179,7 @@
         "name": "linux-coach",
         "workspace": "/home/node/.openclaw/workspace-linux-coach",
         "agentDir": "/home/node/.openclaw/agents/linux-coach/agent",
-        "model": "openrouter/minimax/minimax-m2.7",
+        "model": "openrouter/qwen/qwen3.6-flash",
         "tools": {
           "allow": [
             "sessions_send",
@@ -188,6 +233,15 @@
       "search": {
         "provider": "brave"
       }
+    },
+   "sessions_spawn": {
+	"attachments": {
+		"enabled": true,
+		"maxTotalBytes": 6242880,
+		"maxFiles": 5,
+		"maxFileBytes": 5242880,
+		"retainOnSessionKeep": false
+	 }
     }
   },
   "bindings": [
@@ -238,7 +292,7 @@
           "botToken": "${TELEGRAM_BOT_TOKEN}",
           "groupPolicy": "allowlist",
           "streaming": {
-            "mode": "partial"
+            "mode": "block"
           }
         },
         "vision": {
@@ -311,7 +365,8 @@
       "brave": {
         "enabled": true,
         "config": {
-          "webSearch": {}
+          "webSearch": {
+          }
         }
       }
     }
