@@ -38,6 +38,7 @@ services:
       dockerfile: Dockerfile
       args:
         OPENCLAW_INSTALL_DOCKER_CLI: "1"
+        OPENCLAW_DOCKER_APT_PACKAGES: "${OPENCLAW_DOCKER_APT_PACKAGES:-}"
     image: openclaw:local
     environment:
       HOME: /home/node

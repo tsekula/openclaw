@@ -54,9 +54,9 @@
       },
       "maxConcurrent": 4,
       "subagents": {
-	"allowAgents": ["vision-operator"],
+        "allowAgents": ["vision-operator"],
         "runTimeoutSeconds": 900,
-	"archiveAfterMinutes": 60,
+        "archiveAfterMinutes": 60,
         "maxConcurrent": 8,
         "maxSpawnDepth": 2
       },
@@ -117,7 +117,9 @@
           "mode": "all",
           "workspaceAccess": "rw",
           "docker": {
-            "binds": ["/home/node/.openclaw/media:/home/node/.openclaw/media:ro"],
+            "binds": [
+              "/home/node/.openclaw/media:/home/node/.openclaw/media:ro"
+            ],
             "dangerouslyAllowExternalBindSources": true
           }
         }
@@ -234,14 +236,14 @@
         "provider": "brave"
       }
     },
-   "sessions_spawn": {
-	"attachments": {
-		"enabled": true,
-		"maxTotalBytes": 6242880,
-		"maxFiles": 5,
-		"maxFileBytes": 5242880,
-		"retainOnSessionKeep": false
-	 }
+    "sessions_spawn": {
+      "attachments": {
+        "enabled": true,
+        "maxTotalBytes": 6242880,
+        "maxFiles": 5,
+        "maxFileBytes": 5242880,
+        "retainOnSessionKeep": false
+      }
     }
   },
   "bindings": [
@@ -339,10 +341,7 @@
       "resetOnExit": true
     },
     "controlUi": {
-      "allowedOrigins": [
-        "http://localhost:18789",
-        "http://127.0.0.1:18789"
-      ]
+      "allowedOrigins": ["http://localhost:18789", "http://127.0.0.1:18789"]
     }
   },
   "skills": {
@@ -365,8 +364,7 @@
       "brave": {
         "enabled": true,
         "config": {
-          "webSearch": {
-          }
+          "webSearch": {}
         }
       }
     }
