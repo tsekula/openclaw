@@ -44,15 +44,15 @@
         "openrouter/minimax/minimax-m2.7": {},
         "openrouter/deepseek/deepseek-v4-pro": {},
         "openrouter/deepseek/deepseek-v4-flash": {},
-        "openrouter/qwen/qwen3.6-flash": {},
-        "openrouter/xiaomi/mimo-v2.5-pro": {},
+        "openrouter/qwen/qwen3.7-plus": {},
+        "openrouter/minimax/minimax-m3": {},
         "openrouter/~moonshotai/kimi-latest": {}
       },
       "workspace": "/home/node/.openclaw/workspace",
       "compaction": {
         "mode": "safeguard"
       },
-      "maxConcurrent": 4,
+      "maxConcurrent": 8,
       "subagents": {
         "allowAgents": ["vision-operator"],
         "runTimeoutSeconds": 900,
@@ -82,6 +82,34 @@
         "id": "main",
         "default": true,
         "workspace": "/home/node/.openclaw/workspace",
+        "subagents": {
+          "allowAgents": ["vision-operator"]
+        },
+        "tools": {
+          "allow": [
+            "sessions_send",
+            "sessions_spawn",
+            "sessions_list",
+            "sessions_history",
+            "agents_list",
+            "browser",
+            "message",
+            "tts",
+            "canvas",
+            "web_fetch",
+            "web_search",
+            "memory_search",
+            "memory_get",
+            "group:runtime",
+            "group:fs"
+          ]
+        }
+      },
+      {
+        "id": "family-bot",
+        "default": true,
+        "workspace": "/home/node/.openclaw/workspace-family-bot",
+        "agentDir": "/home/node/.openclaw/agents/family-bot/agent",
         "subagents": {
           "allowAgents": ["vision-operator"]
         },
@@ -262,6 +290,13 @@
       }
     },
     {
+      "agentId": "family-bot",
+      "match": {
+        "channel": "telegram",
+        "accountId": "family-bot"
+      }
+    },
+    {
       "agentId": "life-coach",
       "match": {
         "channel": "telegram",
@@ -300,6 +335,14 @@
         "vision": {
           "dmPolicy": "pairing",
           "botToken": "${TELEGRAM_BOT_TOKEN_VISION}",
+          "groupPolicy": "allowlist",
+          "streaming": {
+            "mode": "block"
+          }
+        },
+        "family-bot": {
+          "dmPolicy": "pairing",
+          "botToken": "${TELEGRAM_BOT_TOKEN_FAMILY_BOT}",
           "groupPolicy": "allowlist",
           "streaming": {
             "mode": "block"
