@@ -1,7 +1,7 @@
 {
   "meta": {
     "lastTouchedVersion": "2026.4.11",
-    "lastTouchedAt": "2026-05-08T17:15:19.227Z"
+    "lastTouchedAt": "2026-06-13T14:02:53.057Z"
   },
   "wizard": {
     "lastRunAt": "2026-05-08T15:35:50.062Z",
@@ -38,7 +38,9 @@
       "thinkingDefault": "minimal",
       "imageModel": {
         "primary": "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-        "fallbacks": ["openrouter/google/gemma-4-26b-a4b-it"]
+        "fallbacks": [
+          "openrouter/google/gemma-4-26b-a4b-it"
+        ]
       },
       "models": {
         "openrouter/minimax/minimax-m2.7": {},
@@ -54,7 +56,9 @@
       },
       "maxConcurrent": 8,
       "subagents": {
-        "allowAgents": ["vision-operator"],
+        "allowAgents": [
+          "vision-operator"
+        ],
         "runTimeoutSeconds": 900,
         "archiveAfterMinutes": 60,
         "maxConcurrent": 8,
@@ -83,7 +87,9 @@
         "default": true,
         "workspace": "/home/node/.openclaw/workspace",
         "subagents": {
-          "allowAgents": ["vision-operator"]
+          "allowAgents": [
+            "vision-operator"
+          ]
         },
         "tools": {
           "allow": [
@@ -111,7 +117,9 @@
         "workspace": "/home/node/.openclaw/workspace-family-bot",
         "agentDir": "/home/node/.openclaw/agents/family-bot/agent",
         "subagents": {
-          "allowAgents": ["vision-operator"]
+          "allowAgents": [
+            "vision-operator"
+          ]
         },
         "tools": {
           "allow": [
@@ -346,6 +354,12 @@
           "groupPolicy": "allowlist",
           "streaming": {
             "mode": "block"
+          },
+          "groups": {
+            "-1003952111992": {
+              "requireMention": true,
+              "allowFrom": ["7592902778"]
+            }
           }
         },
         "life-coach": {
@@ -384,7 +398,10 @@
       "resetOnExit": true
     },
     "controlUi": {
-      "allowedOrigins": ["http://localhost:18789", "http://127.0.0.1:18789"]
+      "allowedOrigins": [
+        "http://localhost:18789",
+        "http://127.0.0.1:18789"
+      ]
     }
   },
   "skills": {
