@@ -38,12 +38,27 @@ services:
       dockerfile: Dockerfile
       args:
         OPENCLAW_INSTALL_DOCKER_CLI: "1"
+        OPENCLAW_EXTENSIONS: "brave google"
         OPENCLAW_DOCKER_APT_PACKAGES: "${OPENCLAW_DOCKER_APT_PACKAGES:-}"
     image: openclaw:local
+    env_file:
+      - path: .env
+        required: false
     environment:
       HOME: /home/node
+      OPENCLAW_HOME: /home/node
       TERM: xterm-256color
-      OPENCLAW_DISABLE_BONJOUR: "1"
+      # Pin container-side state, workspace, and config paths so host values written to
+      # `.env` (used by Compose for the bind-mount source below) cannot leak
+      # into runtime code that resolves these env vars inside the container.
+      # Without this override, a macOS host path like /Users/<you>/.openclaw/...
+      # imported from .env caused first-reply `mkdir '/Users'` EACCES failures
+      # in Linux Docker (#77436).
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
@@ -61,8 +76,9 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
+      - "${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace"
+      - "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -75,12 +91,17 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "988" # Docker group ID - check yours with: getent group docker | cut -d: -f3
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
     init: true
     restart: unless-stopped
     command:
       [
         "node",
-        "dist/index.js",
+        "openclaw.mjs",
         "gateway",
         "--bind",
         "${OPENCLAW_GATEWAY_BIND:-lan}",
@@ -103,6 +124,9 @@ services:
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     network_mode: "service:openclaw-gateway"
+    env_file:
+      - path: .env
+        required: false
     cap_drop:
       - NET_RAW
       - NET_ADMIN
@@ -110,7 +134,14 @@ services:
       - no-new-privileges:true
     environment:
       HOME: /home/node
+      OPENCLAW_HOME: /home/node
       TERM: xterm-256color
+      # Pin container-side state, workspace, and config paths so host values written to
+      # `.env` cannot leak into runtime code via the env_file import (#77436).
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       BROWSER: echo
@@ -119,21 +150,22 @@ services:
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
+      - "${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace"
+      - "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"
       - ${OPENCLAW_CONFIG_DIR}/gh_config:/home/node/.config/gh
       - ~/.ssh:/home/node/.ssh:ro
     stdin_open: true
     tty: true
     init: true
-    entrypoint: ["node", "dist/index.js"]
+    entrypoint: ["node", "openclaw.mjs"]
     depends_on:
       - openclaw-gateway
 
   openclaw-browser:
     build:
       context: .
-      dockerfile: Dockerfile.sandbox-browser
+      dockerfile: scripts/docker/sandbox/Dockerfile.browser
     networks:
       openclaw-net:
         ipv4_address: 172.20.0.10

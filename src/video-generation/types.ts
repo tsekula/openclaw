@@ -1,15 +1,28 @@
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
+// Video generation types describe requests, providers, and normalized media output.
+import type { MediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { MediaNormalizationEntry } from "../media-generation/normalization.types.js";
 
 export type GeneratedVideoAsset = {
-  buffer: Buffer;
+  /** Raw video bytes. Required for local delivery; omit when url is provided instead. */
+  buffer?: Buffer;
+  /** External URL for the video (for example a pre-signed cloud storage URL).
+   * When set and buffer is absent, delivery surfaces can forward the URL
+   * without downloading the full video into memory first. */
+  url?: string;
   mimeType: string;
   fileName?: string;
   metadata?: Record<string, unknown>;
 };
 
-export type VideoGenerationResolution = "480P" | "720P" | "768P" | "1080P";
+export type VideoGenerationResolution =
+  | "360P"
+  | "480P"
+  | "540P"
+  | "720P"
+  | "768P"
+  | "1080P"
+  | (string & {});
 
 /**
  * Canonical semantic role hints for reference assets. The list covers the
@@ -69,6 +82,15 @@ export type VideoGenerationRequest = {
   providerOptions?: Record<string, unknown>;
 };
 
+export type VideoGenerationModelCapabilitiesContext = {
+  provider: string;
+  model: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  timeoutMs?: number;
+};
+
 export type VideoGenerationResult = {
   videos: GeneratedVideoAsset[];
   model?: string;
@@ -91,12 +113,16 @@ export type VideoGenerationMode = "generate" | "imageToVideo" | "videoToVideo";
  */
 export type VideoGenerationProviderOptionType = "number" | "boolean" | "string";
 
+/* jscpd:ignore-start -- Core mirrors public SDK capability shape; assignability checks guard drift. */
 export type VideoGenerationModeCapabilities = {
   maxVideos?: number;
   maxInputImages?: number;
+  maxInputImagesByModel?: Readonly<Record<string, number>>;
   maxInputVideos?: number;
+  maxInputVideosByModel?: Readonly<Record<string, number>>;
   /** Max number of reference audio assets the provider accepts (e.g. background music, voice reference). */
   maxInputAudios?: number;
+  maxInputAudiosByModel?: Readonly<Record<string, number>>;
   maxDurationSeconds?: number;
   supportedDurationSeconds?: readonly number[];
   supportedDurationSecondsByModel?: Readonly<Record<string, readonly number[]>>;
@@ -118,6 +144,7 @@ export type VideoGenerationModeCapabilities = {
    */
   providerOptions?: Readonly<Record<string, VideoGenerationProviderOptionType>>;
 };
+/* jscpd:ignore-end */
 
 export type VideoGenerationTransformCapabilities = VideoGenerationModeCapabilities & {
   enabled: boolean;
@@ -141,8 +168,16 @@ export type VideoGenerationProvider = {
   aliases?: string[];
   label?: string;
   defaultModel?: string;
+  /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
+  defaultTimeoutMs?: number;
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
+  resolveModelCapabilities?: (
+    ctx: VideoGenerationModelCapabilitiesContext,
+  ) =>
+    | VideoGenerationProviderCapabilities
+    | undefined
+    | Promise<VideoGenerationProviderCapabilities | undefined>;
   generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
 };

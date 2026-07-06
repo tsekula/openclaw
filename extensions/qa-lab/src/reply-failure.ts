@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Qa Lab plugin module implements reply failure behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const FAILURE_REPLY_PREFIXES = [
   "⚠️ something went wrong while processing your request.",
@@ -14,6 +15,31 @@ const FAILURE_REPLY_PREFIXES = [
   "⚠️ missing api key for ",
 ];
 
+const VISIBLE_REPLY_LEAK_PATTERNS = [
+  /\bchecking thread context\b/i,
+  /\bthread context thin\b/i,
+  /\bpost a tight progress reply here\b/i,
+  /\bposting a coordination nudge\b/i,
+  /\bposted a short coordination reply\b/i,
+  /\bnot inventing status\b/i,
+];
+
+const TOOL_BACKED_FAILURE_PATTERNS = [
+  /\btool\s+[a-z0-9_.-]+\s+not found\b/i,
+  /^status:\s*blocked\b/im,
+];
+
+export function extractQaVisibleReplyLeakText(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (VISIBLE_REPLY_LEAK_PATTERNS.some((pattern) => pattern.test(trimmed))) {
+    return trimmed;
+  }
+  return undefined;
+}
+
 export function extractQaFailureReplyText(text: string): string | undefined {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -21,6 +47,13 @@ export function extractQaFailureReplyText(text: string): string | undefined {
   }
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (FAILURE_REPLY_PREFIXES.some((prefix) => lower.startsWith(prefix))) {
+    return trimmed;
+  }
+  const visibleReplyLeak = extractQaVisibleReplyLeakText(trimmed);
+  if (visibleReplyLeak) {
+    return visibleReplyLeak;
+  }
+  if (TOOL_BACKED_FAILURE_PATTERNS.some((pattern) => pattern.test(trimmed))) {
     return trimmed;
   }
   return undefined;
