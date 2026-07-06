@@ -113,9 +113,11 @@
       },
       {
         "id": "family-bot",
-        "default": true,
         "workspace": "/home/node/.openclaw/workspace-family-bot",
         "agentDir": "/home/node/.openclaw/agents/family-bot/agent",
+        "sandbox": {
+          "mode": "off"
+        },
         "subagents": {
           "allowAgents": [
             "vision-operator"
