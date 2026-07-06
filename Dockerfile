@@ -203,7 +203,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends 1password-cli
 
 # Install gogcli (Google Workspace CLI — installs as `gog`)
-RUN curl -L https://github.com/steipete/gogcli/releases/latest/download/gogcli_linux_amd64.tar.gz \
+# Update version from https://github.com/openclaw/gogcli/releases
+RUN curl -L https://github.com/openclaw/gogcli/releases/download/v0.32.0/gogcli_0.32.0_linux_amd64.tar.gz \
   | tar -xzO gog > /usr/local/bin/gog && \
   chmod +x /usr/local/bin/gog
 
