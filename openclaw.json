@@ -77,7 +77,8 @@
         },
         "docker": {
           "workdir": "/workspace",
-          "readOnlyRoot": false
+          "readOnlyRoot": false,
+          "network": "bridge"
         }
       }
     },
@@ -269,6 +270,11 @@
   },
   "tools": {
     "deny": [],
+    "sandbox": {
+      "tools": {
+        "alsoAllow": ["web_fetch", "web_search"]
+      }
+    },
     "web": {
       "search": {
         "provider": "brave"
