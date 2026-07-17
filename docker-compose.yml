@@ -37,11 +37,21 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_TOKEN_LIFE_COACH: ${TELEGRAM_BOT_TOKEN_LIFE_COACH:-}
+      TELEGRAM_BOT_TOKEN_VISION: ${TELEGRAM_BOT_TOKEN_VISION:-}
+      TELEGRAM_BOT_TOKEN_FAMILY_BOT: ${TELEGRAM_BOT_TOKEN_FAMILY_BOT:-}
+      TELEGRAM_BOT_TOKEN_LINUX: ${TELEGRAM_BOT_TOKEN_LINUX:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
       - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
       - "${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace"
       - "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"
+      - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}/gh_config:/home/node/.config/gh"
+      - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}/op_config:/home/node/.config/op"
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -116,11 +126,20 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_TOKEN_LIFE_COACH: ${TELEGRAM_BOT_TOKEN_LIFE_COACH:-}
+      TELEGRAM_BOT_TOKEN_VISION: ${TELEGRAM_BOT_TOKEN_VISION:-}
+      TELEGRAM_BOT_TOKEN_FAMILY_BOT: ${TELEGRAM_BOT_TOKEN_FAMILY_BOT:-}
+      TELEGRAM_BOT_TOKEN_LINUX: ${TELEGRAM_BOT_TOKEN_LINUX:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
       - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
       - "${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace"
       - "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"
+      - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}/gh_config:/home/node/.config/gh"
     stdin_open: true
     tty: true
     init: true
