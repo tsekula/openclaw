@@ -311,12 +311,6 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
       return identity;
     }
     const identity = loadOrCreateDeviceIdentity();
-    // Approval registration and wait can use separate gateway connections.
-    // Reject loadOrCreate's unpersisted fallback so both sides bind the same id.
-    const persistedIdentity = loadDeviceIdentityIfPresent();
-    if (persistedIdentity?.deviceId !== identity.deviceId) {
-      throw new Error("device identity is not persisted");
-    }
     return identity;
   } catch (error) {
     if (isNodeApprovalReplay) {
@@ -479,9 +473,9 @@ function isStaleGatewayNodeInvokeTurnSourceRejection(error: unknown): boolean {
     return false;
   }
   const details = asNullableRecord(requestError.details);
-  // A dispatched command may have acted before returning an error. Never turn
-  // version fallback into a duplicate invocation when the Gateway says so.
-  if (details?.nodeCommandDispatched === true) {
+  // Only explicit pre-dispatch provenance makes a second invoke safe. Older
+  // gateways without this fact must fail rather than risk duplicate execution.
+  if (details?.nodeCommandDispatched !== false) {
     return false;
   }
   const message = formatErrorMessage(error);

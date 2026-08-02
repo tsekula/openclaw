@@ -5,7 +5,9 @@ import {
   errorShape,
   validateSessionsCompactParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
   resolveSessionWorkStartError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
@@ -18,20 +20,22 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  interruptSessionWorkAdmissions,
+  isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
 import { recordSessionCompacted } from "../../sessions/session-state-events.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
-import { migrateAndPruneGatewaySessionStoreKey } from "../session-utils.js";
+import { resolveCanonicalGatewaySessionStoreKey } from "../session-utils.js";
+import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
+import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { runGatewaySessionCompaction } from "./sessions-compaction-runner.js";
-import { interruptSessionRunIfActive } from "./sessions-messaging.js";
+import {
+  preflightGatewaySessionCompaction,
+  runGatewaySessionCompaction,
+} from "./sessions-compaction-runner.js";
 import {
   emitSessionOperation,
   loadAccessorSessionEntryForGatewayTarget,
-  rejectWebchatSessionMutation,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
 } from "./sessions-shared.js";
@@ -39,7 +43,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionCompactHandlers: GatewayRequestHandlers = {
-  "sessions.compact": async ({ req, params, respond, context, client, isWebchatConnect }) => {
+  "sessions.compact": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {
       return;
     }
@@ -48,10 +52,6 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "compact", client, isWebchatConnect, respond })) {
-      return;
-    }
-
     const maxLines =
       typeof p.maxLines === "number" && Number.isFinite(p.maxLines)
         ? Math.max(1, Math.floor(p.maxLines))
@@ -78,7 +78,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         const snapshot = Object.fromEntries(
           entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
         );
-        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
           cfg,
           key,
           store: snapshot,
@@ -120,7 +120,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           sessionKey: compactTarget.primaryKey,
           agentId: target.agentId,
         },
-        { maxLines, sessionFile: entry.sessionFile },
+        { maxLines },
       );
       if (!trimPreflight.compacted) {
         respond(
@@ -168,7 +168,9 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       lifecycleRevision,
     ];
     let sessionStillCurrent = true;
-    let admittedWorkReleased = true;
+    let compactionNoopReason: string | undefined;
+    let blockedByActiveRun = false;
+    let blockedByQueuedFollowup = false;
     try {
       await runExclusiveSessionLifecycleMutation({
         scope: storePath,
@@ -180,23 +182,57 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             cfg,
             agentId: requestedAgentId,
           }).entry;
-          sessionStillCurrent = Boolean(
-            latestEntry &&
-            latestEntry.sessionId === sessionId &&
-            latestEntry.lifecycleRevision === lifecycleRevision &&
-            !resolveSessionWorkStartError(target.canonicalKey, latestEntry),
-          );
-          if (!sessionStillCurrent) {
+          if (
+            !latestEntry ||
+            latestEntry.sessionId !== sessionId ||
+            latestEntry.lifecycleRevision !== lifecycleRevision ||
+            resolveSessionWorkStartError(target.canonicalKey, latestEntry)
+          ) {
+            sessionStillCurrent = false;
             return;
           }
-          // Drop work queued against the pre-compaction transcript before its
-          // active admission drains and no longer exposes queue cleanup.
+          if (maxLines === undefined) {
+            compactionNoopReason = (
+              await preflightGatewaySessionCompaction({
+                cfg,
+                entry: latestEntry,
+                agentId: target.agentId,
+                sessionId,
+                sessionKey: target.canonicalKey,
+                sessionStoreKey: compactTarget.primaryKey,
+                storePath,
+              })
+            )?.reason;
+            if (compactionNoopReason) {
+              return;
+            }
+          }
+          blockedByActiveRun =
+            isCompetingSessionWorkAdmissionActive(storePath, lifecycleIdentities) ||
+            (asWorkerInferenceControl(context.workerEnvironmentService)?.hasInferenceForSession(
+              sessionId,
+            ) ??
+              false) ||
+            hasVisibleActiveSessionRun({
+              context,
+              requestedKey: key,
+              canonicalKey: target.canonicalKey,
+              sessionId,
+              agentId: requestedAgentId,
+              defaultAgentId: resolveDefaultAgentId(cfg),
+            });
+          blockedByQueuedFollowup = hasPendingFollowupQueueWork([
+            key,
+            target.canonicalKey,
+            compactTarget.primaryKey,
+            sessionId,
+          ]);
+          if (blockedByActiveRun || blockedByQueuedFollowup) {
+            return;
+          }
+          // Queued follow-ups are accepted user intent, not stale transcript work.
+          // Refuse compaction until the queue drains so cleanup cannot erase them.
           clearSessionQueues([key, target.canonicalKey, compactTarget.primaryKey, sessionId]);
-          admittedWorkReleased = await interruptSessionWorkAdmissions({
-            scope: storePath,
-            identities: lifecycleIdentities,
-            timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-          });
         },
         run: async () => {
           if (!sessionStillCurrent) {
@@ -211,11 +247,38 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             );
             return;
           }
-          if (!admittedWorkReleased) {
+          if (compactionNoopReason) {
+            respond(
+              true,
+              {
+                ok: false,
+                key: target.canonicalKey,
+                compacted: false,
+                reason: compactionNoopReason,
+              },
+              undefined,
+            );
+            return;
+          }
+          if (blockedByQueuedFollowup) {
             respond(
               false,
               undefined,
-              errorShape(ErrorCodes.UNAVAILABLE, `Session ${key} is still active; try again.`),
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `Session ${key} has queued work; retry after it finishes.`,
+              ),
+            );
+            return;
+          }
+          if (blockedByActiveRun) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `Session ${key} has an active run; retry after it finishes.`,
+              ),
             );
             return;
           }
@@ -243,21 +306,6 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             return;
           }
 
-          const interruptResult = await interruptSessionRunIfActive({
-            req,
-            context,
-            client,
-            isWebchatConnect,
-            requestedKey: key,
-            canonicalKey: target.canonicalKey,
-            agentId: requestedAgentId,
-            sessionId,
-          });
-          if (interruptResult.error) {
-            respond(false, undefined, interruptResult.error);
-            return;
-          }
-
           const operationId = randomUUID();
           if (maxLines !== undefined) {
             const trimResult = await trimSessionTranscriptForManualCompact(
@@ -267,7 +315,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 sessionKey: compactTarget.primaryKey,
                 agentId: target.agentId,
               },
-              { maxLines, sessionFile: latestEntry.sessionFile },
+              { maxLines },
             );
             respond(
               true,

@@ -19,9 +19,7 @@ import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommand } from "../commands/health.js";
 import {
-  detectBrowserOpenSupport,
-  formatControlUiSshHint,
-  openUrl,
+  buildOnboardingControlUiUrl,
   probeGatewayReachable,
   waitForGatewayReachable,
   resolveAdvertisedControlUiLinks,
@@ -132,47 +130,6 @@ async function closeSessionGatewayForOnboarding(params: {
   });
 }
 
-async function showControlUiDashboardNote(params: {
-  prompter: WizardPrompter;
-  settings: GatewayWizardSettings;
-  authedUrl: string;
-  controlUiBasePath: string | undefined;
-  hintToken: string | undefined;
-}): Promise<{ opened: boolean }> {
-  let opened = false;
-  let openHint: string | undefined;
-  const browserSupport = await detectBrowserOpenSupport();
-  if (browserSupport.ok) {
-    opened = await openUrl(params.authedUrl);
-    if (!opened) {
-      openHint = formatControlUiSshHint({
-        port: params.settings.port,
-        basePath: params.controlUiBasePath,
-        token: params.hintToken,
-      });
-    }
-  } else {
-    openHint = formatControlUiSshHint({
-      port: params.settings.port,
-      basePath: params.controlUiBasePath,
-      token: params.hintToken,
-    });
-  }
-
-  await params.prompter.note(
-    [
-      t("wizard.finalize.dashboardLinkWithToken", { url: params.authedUrl }),
-      opened ? t("wizard.finalize.dashboardOpened") : t("wizard.finalize.dashboardCopyPaste"),
-      openHint,
-    ]
-      .filter(Boolean)
-      .join("\n"),
-    t("wizard.finalize.dashboardReady"),
-  );
-
-  return { opened };
-}
-
 function getLocalizedGatewayDaemonRuntimeOptions() {
   return GATEWAY_DAEMON_RUNTIME_OPTIONS.map((option) => ({
     hint:
@@ -184,9 +141,7 @@ function getLocalizedGatewayDaemonRuntimeOptions() {
   }));
 }
 
-const loadOnboardSearchModule = createLazyRuntimeModule(
-  () => import("../commands/onboard-search.js"),
-);
+const loadSearchSetupModule = createLazyRuntimeModule(() => import("../flows/search-setup.js"));
 
 /**
  * Ensure the gateway service matches the onboarding decision: prompt/decide
@@ -580,10 +535,12 @@ export async function finalizeSetupWizard(
       basePath: controlUiBasePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
-    const authedUrl =
-      settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
-        ? `${displayLinks.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
-        : displayLinks.httpUrl;
+    const authedUrl = buildOnboardingControlUiUrl({
+      httpUrl: displayLinks.httpUrl,
+      authMode: settings.authMode,
+      token: settings.gatewayToken,
+      suppressTokenOutput: suppressGatewayTokenOutput,
+    });
     if (opts.skipHealth || !gatewayProbe.ok) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
@@ -612,12 +569,15 @@ export async function finalizeSetupWizard(
     // route facts must not turn the onboarding greeting into a guaranteed failure.
     const [
       { resolveDefaultModelAuthStatus, resolveDefaultModelCatalogFacts },
-      { loadModelCatalogSnapshot },
+      { loadPreparedModelCatalogSnapshot },
     ] = await Promise.all([
       import("../commands/auth-choice.js"),
-      import("../agents/model-catalog.js"),
+      import("../agents/prepared-model-catalog.js"),
     ]);
-    const modelCatalog = await loadModelCatalogSnapshot({ config: nextConfig, readOnly: true });
+    const modelCatalog = await loadPreparedModelCatalogSnapshot({
+      config: nextConfig,
+      readOnly: true,
+    });
     const modelCatalogFacts = resolveDefaultModelCatalogFacts(nextConfig, modelCatalog.entries, {
       routeVariants: modelCatalog.routeVariants,
     });
@@ -646,8 +606,6 @@ export async function finalizeSetupWizard(
       "Control UI",
     );
 
-    let controlUiOpened = false;
-    const seededInBackground = false;
     let launchedTui = false;
     const shouldLaunchTui = !opts.skipUi;
 
@@ -705,30 +663,12 @@ export async function finalizeSetupWizard(
 
     await setupWizardShellCompletion({ flow, prompter });
 
-    const shouldOpenControlUi =
-      !opts.skipUi &&
-      gatewayProbe.ok &&
-      settings.authMode === "token" &&
-      Boolean(settings.gatewayToken) &&
-      !suppressGatewayTokenOutput &&
-      !shouldLaunchTui;
-    if (shouldOpenControlUi) {
-      const dashboard = await showControlUiDashboardNote({
-        prompter,
-        settings,
-        authedUrl,
-        controlUiBasePath,
-        hintToken: settings.gatewayToken,
-      });
-      controlUiOpened = dashboard.opened;
-    }
-
     const codexNativeSummary = describeCodexNativeWebSearch(nextConfig);
     const webSearchProvider = nextConfig.tools?.web?.search?.provider;
     const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
     const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
     if (webSearchProvider) {
-      const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
+      const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadSearchSetupModule();
       const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
       const label = entry?.label ?? webSearchProvider;
       const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
@@ -827,7 +767,7 @@ export async function finalizeSetupWizard(
     } else {
       // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
       // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
-      const { hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
+      const { hasExistingKey, hasKeyInEnv } = await loadSearchSetupModule();
       const legacyDetected = configuredSearchProviders.find(
         (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
       );
@@ -874,13 +814,7 @@ export async function finalizeSetupWizard(
 
     await prompter.note(t("wizard.finalize.whatNow"), t("wizard.finalize.whatNowTitle"));
 
-    await prompter.outro(
-      controlUiOpened
-        ? t("wizard.finalize.outroDashboardOpened")
-        : seededInBackground
-          ? t("wizard.finalize.outroSeeded")
-          : t("wizard.finalize.outroDashboardLink"),
-    );
+    await prompter.outro(t("wizard.finalize.outroDashboardLink"));
 
     if (shouldLaunchTui) {
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });

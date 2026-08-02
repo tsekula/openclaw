@@ -13,6 +13,7 @@ type Step = {
   run?: string;
   uses?: string;
   with?: Record<string, string | number>;
+  "working-directory"?: string;
 };
 type Job = {
   name?: string;
@@ -101,6 +102,33 @@ describe("plugin npm extended-stable workflow", () => {
           name,
         ).env,
       ).toMatchObject({ OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: expectedOverride });
+    }
+  });
+
+  it("overlays the complete trusted packaging helper dependency pair", () => {
+    const parsed = workflow();
+    const preflightCheckout = step(
+      parsed.jobs?.preview_plugin_pack,
+      "Checkout trusted packaging helper",
+    );
+    expect(preflightCheckout.with?.["sparse-checkout"]).toContain(
+      "scripts/generate-npm-package-lock.mjs",
+    );
+    expect(preflightCheckout.with?.["sparse-checkout"]).toContain(
+      "scripts/lib/plugin-npm-package-manifest.mjs",
+    );
+
+    const expectedCopies = [
+      "scripts/generate-npm-package-lock.mjs",
+      "scripts/lib/plugin-npm-package-manifest.mjs",
+    ];
+    for (const helperPath of expectedCopies) {
+      expect(
+        step(parsed.jobs?.preview_plugin_pack, "Overlay trusted packaging helper").run,
+      ).toContain(helperPath);
+      expect(
+        step(parsed.jobs?.publish_plugins_npm, "Overlay trusted OIDC packaging helper").run,
+      ).toContain(helperPath);
     }
   });
 
@@ -321,6 +349,22 @@ describe("plugin npm extended-stable workflow", () => {
     expect(pluginManifest.id).toBe("meta");
   });
 
+  it("bounds external git fetch and npm publish operations", () => {
+    const source = readFileSync(workflowPath, "utf8");
+    const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
+    const npmPublishLines = source
+      .split("\n")
+      .filter((line) => line.includes('npm publish "$TARBALL_PATH"'));
+
+    expect(gitFetchLines).toHaveLength(6);
+    expect(
+      gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
+    ).toBe(true);
+    expect(npmPublishLines).toEqual([
+      '            timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \\',
+    ]);
+  });
+
   it("publishes extended-stable with OIDC only and verifies every package tag", () => {
     const parsed = workflow();
     const publish = step(parsed.jobs?.publish_plugins_npm, "Publish with trusted publisher");
@@ -383,6 +427,15 @@ describe("plugin npm extended-stable workflow", () => {
       step(parsed.jobs?.publish_plugins_npm, "Checkout trusted publication tooling").with?.ref,
     ).toBe("${{ github.workflow_sha }}");
     expect(
+      step(parsed.jobs?.preview_plugin_pack, "Checkout trusted packaging helper").with,
+    ).toMatchObject({
+      ref: "${{ github.workflow_sha }}",
+      path: ".release-tooling",
+    });
+    expect(
+      step(parsed.jobs?.preview_plugin_pack, "Overlay trusted packaging helper").run,
+    ).toContain(".release-tooling/scripts/lib/plugin-npm-package-manifest.mjs");
+    expect(
       step(parsed.jobs?.publish_plugins_npm, "Setup trusted publication dependencies").if,
     ).toContain("npm-token-bootstrap");
     expect(
@@ -391,6 +444,18 @@ describe("plugin npm extended-stable workflow", () => {
     expect(step(parsed.jobs?.publish_plugins_npm, "Checkout OIDC publication target").if).toContain(
       "npm-oidc",
     );
+    expect(
+      step(parsed.jobs?.publish_plugins_npm, "Checkout OIDC publication target").with?.path,
+    ).toBe(".publication-target");
+    expect(
+      step(parsed.jobs?.publish_plugins_npm, "Overlay trusted OIDC packaging helper").run,
+    ).toContain(".publication-target/scripts/lib/plugin-npm-package-manifest.mjs");
+    expect(step(parsed.jobs?.publish_plugins_npm, "Setup OIDC publication target").uses).toBe(
+      "./.github/actions/setup-node-env",
+    );
+    expect(
+      step(parsed.jobs?.publish_plugins_npm, "Publish with trusted publisher")["working-directory"],
+    ).toBe(".publication-target");
     expect(parsed.jobs?.reconcile_plugins_npm).toBeUndefined();
     expect(readFileSync(workflowPath, "utf8")).not.toContain(
       'npm dist-tag add "${PACKAGE_NAME}@${PACKAGE_VERSION}" extended-stable',

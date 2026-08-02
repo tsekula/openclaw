@@ -2,6 +2,7 @@
 export {
   hasConfiguredChannelsForReadOnlyScope,
   hasExplicitChannelConfig,
+  listAmbientOnlyConfiguredChannelIds,
   listConfiguredAnnounceChannelIdsForConfig,
   listConfiguredChannelIdsForReadOnlyScope,
   listExplicitConfiguredChannelIdsForConfig,
@@ -20,8 +21,6 @@ export {
   collectUnregisteredConfiguredMemoryEmbeddingProviders,
   resolveChannelPluginIds,
   resolveChannelPluginIdsFromRegistry,
-  resolveConfiguredDeferredChannelPluginIds,
-  resolveConfiguredDeferredChannelPluginIdsFromRegistry,
   createConfigValidationMetadataPluginIdScope,
   createGatewayStartupMetadataPluginIdScope,
   isMetadataSnapshotScopedForGatewayStartup,

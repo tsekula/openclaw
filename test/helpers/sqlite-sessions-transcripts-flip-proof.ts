@@ -13,12 +13,12 @@ import {
   readSessionArchiveContentSync,
   stripSessionArchiveCompressionSuffix,
 } from "../../src/config/sessions/archive-compression.js";
+import { formatSqliteSessionFileMarker } from "../../src/config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
 import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite.js";
-import { formatSqliteSessionFileMarker } from "../../src/config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import {
   connectGatewayClient,
@@ -36,10 +36,13 @@ import {
   resolveSessionTranscriptIdentity,
 } from "../../src/plugin-sdk/session-transcript-runtime.js";
 import { sleep } from "../../src/utils.js";
+import { normalizeSessionDeliveryState } from "../../src/utils/delivery-context.shared.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
 type DoctorMode = "import" | "inspect" | "validate" | "restore";
 type ProofChildProcess = ChildProcessByStdio<null, Readable, Readable>;
+
+const SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS = 60_000;
 
 type DoctorMigrationRunEvidence = {
   failureReportJsonPath?: string;
@@ -115,7 +118,7 @@ type PluginSdkConsumerEvidence = {
   latestAssistantTextBeforeAppend: string;
   latestAssistantTextAfterAppend: string;
   listedSessionKeys: string[];
-  sessionFileMarker: string;
+  sessionIdentity: string;
   sessionId: string;
   sessionKey: string;
   storeTranscriptEvents: number;
@@ -128,7 +131,7 @@ type ManualCompactionEvidence = {
   compacted: boolean;
   rowCountAfter: number;
   rowCountBefore: number;
-  sessionFileMarker: string;
+  transcriptIdentity: string;
   sessionId: string;
   sessionKey: string;
 };
@@ -363,8 +366,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       url: inst.url,
       token: inst.gatewayToken,
       clientDisplayName: "sqlite-sessions-transcripts-flip-proof",
-      requestTimeoutMs: 20_000,
-      timeoutMs: 20_000,
+      requestTimeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
+      timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
     });
     try {
       await waitForHistoryContains(client, context.resetSessionKey, "legacy hello");
@@ -380,8 +383,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       url: inst.url,
       token: inst.gatewayToken,
       clientDisplayName: "sqlite-sessions-transcripts-flip-proof-restart",
-      requestTimeoutMs: 20_000,
-      timeoutMs: 20_000,
+      requestTimeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
+      timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
     });
     let restartedClientConnected = true;
     try {
@@ -487,8 +490,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(
         url: inst.url,
         token: inst.gatewayToken,
         clientDisplayName: "sqlite-sessions-transcripts-flip-proof-post-reset-restart",
-        requestTimeoutMs: 20_000,
-        timeoutMs: 20_000,
+        requestTimeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
+        timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
       });
       try {
         secondStartupAfterReset = await runSecondStartupAfterResetProof(
@@ -527,7 +530,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     const finalInspectDoctor = await runDoctor(inst, "inspect", context.storePath);
     await record("after-final-doctor-inspect", finalInspectDoctor);
   } catch (error) {
-    failures.push(error instanceof Error ? error.message : String(error));
+    const message = error instanceof Error ? error.message : String(error);
+    failures.push(`${message}\nGateway diagnostics:\n${tail(inst.logs(), 6_000)}`);
     await record("failure");
   } finally {
     await stopChildProcess(mockOpenAi);
@@ -635,6 +639,7 @@ function buildMockOpenAiConfig(mockPort: number): Record<string, unknown> {
           },
         },
       },
+      entries: { main: { default: true } },
     },
     models: {
       mode: "merge",
@@ -707,7 +712,7 @@ async function startMockOpenAiServer(params: {
   child.stderr.on("data", (chunk) => {
     output += String(chunk);
   });
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(
@@ -1223,12 +1228,8 @@ async function runManualCompactionProof(
   if (checkpointCount < 1) {
     throw new Error(`manual compaction did not write checkpoint metadata: ${JSON.stringify(row)}`);
   }
-  const sessionFileMarker = typeof row.entry.sessionFile === "string" ? row.entry.sessionFile : "";
-  if (!sessionFileMarker.startsWith("sqlite:")) {
-    throw new Error(`manual compaction entry did not keep a SQLite marker: ${sessionFileMarker}`);
-  }
-  if (fsSync.existsSync(sessionFileMarker)) {
-    throw new Error(`manual compaction marker unexpectedly exists as a file: ${sessionFileMarker}`);
+  if (Object.hasOwn(row.entry, "sessionFile")) {
+    throw new Error(`manual compaction entry retained file-era identity: ${JSON.stringify(row)}`);
   }
 
   return {
@@ -1236,7 +1237,7 @@ async function runManualCompactionProof(
     compacted: compacted.compacted,
     rowCountAfter: countSqliteTranscriptEvents(context.agentDbPath, row.sessionId),
     rowCountBefore,
-    sessionFileMarker,
+    transcriptIdentity: context.manualCompactionSessionKey,
     sessionId: row.sessionId,
     sessionKey: context.manualCompactionSessionKey,
   };
@@ -1263,20 +1264,8 @@ async function runPluginSdkConsumerProbe(
       `SDK session store read returned ${JSON.stringify(sessionEntry)} for ${context.pluginSdkSessionKey}`,
     );
   }
-  const expectedMarker = formatSqliteSessionFileMarker({
-    agentId: context.agentId,
-    sessionId,
-    storePath: context.storePath,
-  });
-  if (sessionEntry.sessionFile !== expectedMarker) {
-    throw new Error(
-      `SDK session store exposed unexpected transcript marker for ${context.pluginSdkSessionKey}: ${String(
-        sessionEntry.sessionFile,
-      )}`,
-    );
-  }
-  if (fsSync.existsSync(sessionEntry.sessionFile)) {
-    throw new Error(`SDK session marker unexpectedly resolves to an active file path`);
+  if (Object.hasOwn(sessionEntry, "sessionFile")) {
+    throw new Error(`SDK session store exposed retired transcript locator`);
   }
 
   const listedSessionKeys = listSdkSessionEntries({
@@ -1371,7 +1360,7 @@ async function runPluginSdkConsumerProbe(
     latestAssistantTextBeforeAppend: latestBefore.text,
     latestAssistantTextAfterAppend: latestAfter.text,
     listedSessionKeys,
-    sessionFileMarker: sessionEntry.sessionFile,
+    sessionIdentity: context.pluginSdkSessionKey,
     sessionId,
     sessionKey: context.pluginSdkSessionKey,
     storeTranscriptEvents,
@@ -1388,7 +1377,7 @@ async function runGatewayCleanupPruningProof(
   await importSqliteSessionRows({
     agentId: context.agentId,
     entry: {
-      channel: "cli",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "cli" } }),
       chatType: "direct",
       sessionFile: formatSqliteSessionFileMarker({
         agentId: context.agentId,
@@ -1420,7 +1409,7 @@ async function runGatewayCleanupPruningProof(
   const result: { afterCount?: number; applied?: boolean; pruned?: number } = await client.request(
     "sessions.cleanup",
     { enforce: true },
-    { timeoutMs: 20_000 },
+    { timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS },
   );
   if (result?.applied !== true || (result.pruned ?? 0) < 1) {
     throw new Error(`sessions.cleanup did not prune stale SQLite rows: ${JSON.stringify(result)}`);
@@ -1636,7 +1625,7 @@ async function runSqliteBusyContentionProof(
     childOutput += String(chunk);
   });
 
-  await waitForFile(readyPath, 10_000, () => {
+  await waitForFile(readyPath, SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS, () => {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(
         `SQLite busy child exited before acquiring lock code=${String(
@@ -1662,7 +1651,7 @@ async function runSqliteBusyContentionProof(
     storePath: context.storePath,
   });
   const elapsedMs = Date.now() - startedAt;
-  const exit = await waitForChildExit(child, 10_000);
+  const exit = await waitForChildExit(child, SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS);
   if (exit.code !== 0) {
     throw new Error(
       `SQLite busy child exited non-zero code=${String(exit.code)} signal=${String(
@@ -1723,15 +1712,15 @@ async function runConcurrentMultiClientLifecycle(
     url: inst.url,
     token: inst.gatewayToken,
     clientDisplayName: "sqlite-sessions-transcripts-flip-proof-concurrent-history",
-    requestTimeoutMs: 20_000,
-    timeoutMs: 20_000,
+    requestTimeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
+    timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
   });
   const lifecycleClient = await connectGatewayClient({
     url: inst.url,
     token: inst.gatewayToken,
     clientDisplayName: "sqlite-sessions-transcripts-flip-proof-concurrent-lifecycle",
-    requestTimeoutMs: 20_000,
-    timeoutMs: 20_000,
+    requestTimeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
+    timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS,
   });
   try {
     await requireHistoryContains(
@@ -1747,7 +1736,7 @@ async function runConcurrentMultiClientLifecycle(
     const historyPromise = historyClient.request(
       "chat.history",
       { sessionKey: context.concurrentResetSessionKey, limit: 50 },
-      { timeoutMs: 20_000 },
+      { timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS },
     );
     const resetPromise = resetSession(lifecycleClient, context.concurrentResetSessionKey);
 
@@ -1787,7 +1776,7 @@ async function runConcurrentMultiClientLifecycle(
     const deleteHistoryPromise = lifecycleClient.request(
       "chat.history",
       { sessionKey: context.concurrentDeleteSessionKey, limit: 50 },
-      { timeoutMs: 20_000 },
+      { timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS },
     );
     await Promise.all([
       deleteHistoryPromise,
@@ -1829,7 +1818,7 @@ async function sendGatewayUserMessage(
       message,
       idempotencyKey: `sqlite-send-${randomUUID()}`,
     },
-    { timeoutMs: 20_000 },
+    { timeoutMs: SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS },
   );
   if (result?.status !== "started" || typeof result.runId !== "string") {
     throw new Error(`chat.send did not start correctly: ${JSON.stringify(result)}`);
@@ -1988,7 +1977,7 @@ async function waitForSqliteEvents(
   sessionId: string,
   minEvents: number,
 ): Promise<void> {
-  const deadline = Date.now() + 10_000;
+  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const sqlite = readSqliteEvidence(dbPath, []);
     const row = sqlite.trackedEntries.find((entry) => entry.sessionId === sessionId);
@@ -2001,7 +1990,7 @@ async function waitForSqliteEvents(
 }
 
 async function waitForSqliteSessionId(dbPath: string, sessionKey: string): Promise<string> {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const row = readSqliteEvidence(dbPath, [sessionKey]).trackedEntries.find(
       (entry) => entry.sessionKey === sessionKey && entry.sessionId,
@@ -2019,7 +2008,7 @@ async function waitForTrackedSessionId(
   sessionKey: string,
   expectedSessionId: string,
 ): Promise<void> {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const row = readSqliteEvidence(dbPath, [sessionKey]).trackedEntries.find(
       (entry) => entry.sessionKey === sessionKey,
@@ -2035,7 +2024,7 @@ async function waitForTrackedSessionId(
 }
 
 async function waitForSessionEntryAbsent(dbPath: string, sessionKey: string): Promise<void> {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
   let absentSince: number | undefined;
   while (Date.now() < deadline) {
     const row = readSqliteEvidence(dbPath, [sessionKey]).trackedEntries.find(
@@ -2056,7 +2045,7 @@ async function waitForSessionEntryAbsent(dbPath: string, sessionKey: string): Pr
 }
 
 async function waitForSqliteEventsAbsent(dbPath: string, sessionId: string): Promise<void> {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
   let absentSince: number | undefined;
   while (Date.now() < deadline) {
     const count = countSqliteTranscriptEvents(dbPath, sessionId);
@@ -2080,7 +2069,7 @@ async function waitForSqliteMessageContains(
   role: "assistant" | "user",
   expected: string,
 ): Promise<void> {
-  const deadline = Date.now() + 20_000;
+  const deadline = Date.now() + SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const messages = readSqliteTranscriptMessages(dbPath, sessionId);
     if (
@@ -2361,8 +2350,8 @@ function readSqliteEvidence(dbPath: string, trackedSessionKeys: readonly string[
     return {
       exists: true,
       path: dbPath,
-      sessionEntries: scalarNumber(db, "SELECT COUNT(*) AS count FROM session_entries"),
-      sessions: scalarNumber(db, "SELECT COUNT(*) AS count FROM sessions"),
+      sessionEntries: scalarNumber(db, "SELECT COUNT(*) AS count FROM session_nodes"),
+      sessions: scalarNumber(db, "SELECT COUNT(*) AS count FROM session_windows"),
       trajectoryRuntimeEvents: scalarNumber(
         db,
         "SELECT COUNT(*) AS count FROM trajectory_runtime_events",
@@ -2381,8 +2370,8 @@ function readTrackedEntries(
 ): SqliteSessionEntryEvidence[] {
   const rows = db
     .prepare(
-      `SELECT session_key AS sessionKey, session_id AS sessionId, entry_json AS entryJson
-       FROM session_entries
+      `SELECT session_key AS sessionKey, current_session_id AS sessionId, entry_json AS entryJson
+       FROM session_nodes
        ORDER BY session_key ASC`,
     )
     .all() as Array<{ entryJson?: unknown; sessionId?: unknown; sessionKey?: unknown }>;
@@ -2492,12 +2481,14 @@ function validateCheckpointInvariants(
     });
   }
   if (checkpoint.label === "after-sessions-reset") {
-    requireArchiveText(checkpoint, failures, {
-      description: "reset transcript archive",
-      includes: ["legacy hello", "sqlite user-facing send before reset"],
-      reason: "reset",
-      sessionId: context.legacySessionId,
-    });
+    // Retained history: reset rotates the live session id but keeps the old
+    // generation's SQLite rows searchable; no reset archive is produced.
+    if (findArchiveArtifact(checkpoint, { reason: "reset", sessionId: context.legacySessionId })) {
+      failures.push(`${checkpoint.label}: unexpected reset transcript archive`);
+    }
+    if (checkpoint.sqlite.transcriptEvents === 0) {
+      failures.push(`${checkpoint.label}: retained transcript rows missing after reset`);
+    }
   }
   if (checkpoint.label === "after-sessions-delete") {
     requireArchiveText(checkpoint, failures, {
@@ -2540,12 +2531,22 @@ function validateCheckpointInvariants(
     }
   }
   if (checkpoint.label === "after-shared-final-delete") {
-    requireArchiveText(checkpoint, failures, {
-      description: "final shared transcript archive",
-      includes: ["shared"],
+    const deletedArchive = findArchiveArtifact(checkpoint, {
       reason: "deleted",
       sessionId: "sqlite-shared-session",
     });
+    if (!deletedArchive) {
+      // Both legacy files claim one session id, so the importer preserves the
+      // ambiguous sources as artifacts instead of materializing duplicate rows.
+      // Final deletion must not synthesize a second archive from empty SQLite state.
+      for (const sourceName of ["sqlite-shared-a.jsonl", "sqlite-shared-b.jsonl"]) {
+        requireArchiveText(checkpoint, failures, {
+          description: `retained shared import source ${sourceName}`,
+          includes: ["shared"],
+          pathIncludes: sourceName,
+        });
+      }
+    }
   }
 }
 

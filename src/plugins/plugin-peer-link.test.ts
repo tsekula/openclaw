@@ -52,6 +52,94 @@ describe("plugin peer links", () => {
     expect(messages.join("\n")).toContain('Linked peerDependency "openclaw"');
   });
 
+  it("relinks openclaw runtime dependencies in the managed npm root", async () => {
+    const npmRoot = makeTempDir();
+    const packageDir = path.join(npmRoot, "node_modules", "runtime-plugin");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "runtime-plugin",
+        version: "1.0.0",
+        dependencies: {
+          openclaw: "2026.7.1",
+        },
+      }),
+      "utf8",
+    );
+
+    const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+      npmRoot,
+      logger: {},
+    });
+
+    const linkPath = path.join(packageDir, "node_modules", "openclaw");
+    expect(result).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 0 });
+    expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
+  });
+
+  it("reports one unreadable package and continues repairing its sibling", async () => {
+    const npmRoot = makeTempDir();
+    const unreadableDir = path.join(npmRoot, "node_modules", "bad-plugin");
+    const peerDir = path.join(npmRoot, "node_modules", "peer-plugin");
+    fs.mkdirSync(unreadableDir, { recursive: true });
+    fs.mkdirSync(peerDir, { recursive: true });
+    fs.writeFileSync(path.join(unreadableDir, "package.json"), "{", "utf8");
+    fs.writeFileSync(
+      path.join(peerDir, "package.json"),
+      JSON.stringify({
+        name: "peer-plugin",
+        peerDependencies: { openclaw: ">=2026.0.0" },
+      }),
+      "utf8",
+    );
+    const failures: Array<{ error: unknown; packageDir: string }> = [];
+
+    const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
+      npmRoot,
+      logger: {},
+      onPackageReadError: (error, packageDir) => failures.push({ error, packageDir }),
+    });
+
+    expect(result).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 1 });
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.packageDir).toBe(unreadableDir);
+    expect(failures[0]?.error).toBeInstanceOf(SyntaxError);
+    expect(fs.lstatSync(path.join(peerDir, "node_modules", "openclaw")).isSymbolicLink()).toBe(
+      true,
+    );
+  });
+
+  it("reports one unreadable package and continues auditing its sibling", async () => {
+    const npmRoot = makeTempDir();
+    const unreadableDir = path.join(npmRoot, "node_modules", "bad-plugin");
+    const peerDir = path.join(npmRoot, "node_modules", "peer-plugin");
+    fs.mkdirSync(unreadableDir, { recursive: true });
+    fs.mkdirSync(peerDir, { recursive: true });
+    fs.writeFileSync(path.join(unreadableDir, "package.json"), "{", "utf8");
+    fs.writeFileSync(
+      path.join(peerDir, "package.json"),
+      JSON.stringify({
+        name: "peer-plugin",
+        peerDependencies: { openclaw: ">=2026.0.0" },
+      }),
+      "utf8",
+    );
+    const failures: Array<{ error: unknown; packageDir: string }> = [];
+
+    const result = await auditOpenClawPeerDependenciesInManagedNpmRoot({
+      npmRoot,
+      onPackageReadError: (error, packageDir) => failures.push({ error, packageDir }),
+    });
+
+    expect(result.checked).toBe(1);
+    expect(result.broken).toBe(1);
+    expect(result.issues[0]?.packageName).toBe("peer-plugin");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.packageDir).toBe(unreadableDir);
+  });
+
   it("audits missing managed npm openclaw peer links without relinking", async () => {
     const npmRoot = makeTempDir();
     const packageDir = path.join(npmRoot, "node_modules", "peer-plugin");

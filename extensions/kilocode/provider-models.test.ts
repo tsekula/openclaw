@@ -135,6 +135,7 @@ async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: ()
 
   try {
     await runAssertions();
+    return release;
   } finally {
     vi.unstubAllEnvs();
     fetchWithSsrFGuardMock.mockReset();
@@ -187,7 +188,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const guardedFetch = requireRecord(guardedFetchParams, "guarded fetch params");
       expect(guardedFetch.url).toBe(KILOCODE_MODELS_URL);
       const guardedInit = requireRecord(guardedFetch.init, "guarded fetch init");
-      expect(guardedInit.headers).toEqual({ Accept: "application/json" });
+      expect(Object.fromEntries(new Headers(guardedInit.headers as HeadersInit))).toEqual({
+        accept: "application/json",
+      });
       expect(guardedFetch.policy).toEqual({ allowedHostnames: ["api.kilo.ai"] });
       expect(guardedFetch.timeoutMs).toBe(5000);
       expect(guardedFetch.auditContext).toBe("kilocode.model_discovery");
@@ -196,7 +199,9 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const [fetchUrl, fetchOptions] = requireFirstMockCall(mockFetch, "mock fetch call");
       expect(fetchUrl).toBe(KILOCODE_MODELS_URL);
       const fetchInit = requireRecord(fetchOptions, "mock fetch init");
-      expect(fetchInit.headers).toEqual({ Accept: "application/json" });
+      expect(Object.fromEntries(new Headers(fetchInit.headers as HeadersInit))).toEqual({
+        accept: "application/json",
+      });
 
       expect(models.length).toBe(2);
 
@@ -221,11 +226,17 @@ describe("discoverKilocodeModels (fetch path)", () => {
   });
 
   it("falls back to static catalog on HTTP error", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 500 }));
-    await withFetchPathTest(mockFetch, async () => {
+    const response = new Response("temporary failure", { status: 500 });
+    const cancelSpy = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const mockFetch = vi.fn().mockResolvedValue(response);
+
+    const release = await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
       expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
     });
+
+    expect(cancelSpy).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("falls back to static catalog for malformed successful model list payloads", async () => {
@@ -301,6 +312,28 @@ describe("discoverKilocodeModels (fetch path)", () => {
       const textModel = requireModelById(models, "some/text-model");
       expect(textModel.input).toEqual(["text"]);
       expect(textModel.reasoning).toBe(false);
+    });
+  });
+
+  it("excludes image-output models from the chat catalog", async () => {
+    const imageOutputModel = makeGatewayModel({
+      id: "google/gemini-3.1-flash-image",
+      architecture: {
+        input_modalities: ["text", "image"],
+        output_modalities: ["image", "text"],
+      },
+    });
+
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ data: [imageOutputModel, makeGatewayModel()] }));
+    await withFetchPathTest(mockFetch, async () => {
+      const models = await discoverKilocodeModels();
+
+      expect(models.some((model) => model.id === "google/gemini-3.1-flash-image")).toBe(false);
+      expect(requireModelById(models, "anthropic/claude-sonnet-4").id).toBe(
+        "anthropic/claude-sonnet-4",
+      );
     });
   });
 

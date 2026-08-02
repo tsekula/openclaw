@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   artifactDownloadArgs,
   expectedChildDispatches,
@@ -17,11 +17,13 @@ import {
   releaseCiWatchFingerprint,
   requiredChildKeysForRerunGroup,
   resolveManifestChildOriginAttempt,
+  runReleaseCiGh,
   selectExactChildRun,
   selectExactChildRunFromPages,
   selectManifestArtifact,
   selectManifestParentJob,
   selectedChildKeys,
+  terminalParentJobFailures,
   validateEvidenceReuseChain,
   validateManifestArtifactCompatibility,
   validateManifestArtifactIdentity,
@@ -48,6 +50,39 @@ describe("GitHub API commands", () => {
       "api",
       "repos/owner/repo/actions/artifacts/456/zip",
     ]);
+  });
+});
+
+describe("runReleaseCiGh", () => {
+  it("bounds each GitHub lookup with a timeout and SIGKILL", () => {
+    const execFileSyncImpl = vi.fn(() => "result");
+
+    expect(
+      runReleaseCiGh(["api", "repos/openclaw/openclaw/actions/runs/1"], { execFileSyncImpl }),
+    ).toBe("result");
+    expect(execFileSyncImpl).toHaveBeenCalledOnce();
+    expect(execFileSyncImpl).toHaveBeenCalledWith(
+      expect.any(String),
+      ["api", "repos/openclaw/openclaw/actions/runs/1"],
+      expect.objectContaining({
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: 60_000,
+      }),
+    );
+  });
+
+  it("propagates GitHub lookup timeouts", () => {
+    const timeoutError = Object.assign(new Error("spawnSync gh ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+    expect(() =>
+      runReleaseCiGh(["api", "rate_limit"], {
+        execFileSyncImpl: () => {
+          throw timeoutError;
+        },
+      }),
+    ).toThrow(timeoutError);
   });
 });
 
@@ -456,6 +491,20 @@ describe("release CI summary child correlation", () => {
     ).not.toBe(releaseCiWatchFingerprint(parent));
   });
 
+  it("classifies only terminal unsuccessful parent jobs as failures", () => {
+    expect(
+      terminalParentJobFailures({
+        jobs: [
+          { conclusion: "success", name: "success", status: "completed" },
+          { conclusion: "neutral", name: "neutral", status: "completed" },
+          { conclusion: "skipped", name: "skipped", status: "completed" },
+          { conclusion: "failure", name: "failed", status: "completed" },
+          { conclusion: "", name: "running", status: "in_progress" },
+        ],
+      }),
+    ).toEqual(["failed"]);
+  });
+
   it("summarizes only transitions while watching a release run", async () => {
     const states = [
       { attempt: 1, conclusion: "", jobs: [], status: "queued" },
@@ -486,6 +535,37 @@ describe("release CI summary child correlation", () => {
 
     expect(summaries).toBe(2);
     expect(sleeps).toBe(2);
+  });
+
+  it("stops watching after reporting a terminal parent job failure", async () => {
+    let summaries = 0;
+    let sleeps = 0;
+
+    await expect(
+      watchReleaseCiRun(parseReleaseCiSummaryArgs(["29071366025", "--watch", "--interval", "1"]), {
+        fetchParent: () => ({
+          attempt: 1,
+          conclusion: "",
+          jobs: [
+            {
+              conclusion: "failure",
+              name: "Run release/live/Docker/QA validation",
+              status: "completed",
+            },
+            { conclusion: "", name: "Run normal full CI", status: "in_progress" },
+          ],
+          status: "in_progress",
+        }),
+        sleep: async () => {
+          sleeps += 1;
+        },
+        summarize: () => {
+          summaries += 1;
+        },
+      }),
+    ).rejects.toThrow("Run release/live/Docker/QA validation");
+    expect(summaries).toBe(1);
+    expect(sleeps).toBe(0);
   });
 
   it("selects one immutable manifest artifact bound to the exact parent run", () => {
