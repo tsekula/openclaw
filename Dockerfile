@@ -387,6 +387,28 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         docker-ce-cli docker-compose-plugin; \
     fi
 
+# Optionally install the 1Password CLI (`op`) for secret-ref resolution and
+# other credential workflows that shell out to it.
+# Build with: docker build --build-arg OPENCLAW_INSTALL_1PASSWORD_CLI=1 ...
+# Adds ~40MB to the runtime image.
+ARG OPENCLAW_INSTALL_1PASSWORD_CLI=""
+RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+    if [ -n "$OPENCLAW_INSTALL_1PASSWORD_CLI" ]; then \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg && \
+      curl -fsSL --connect-timeout 10 --max-time 120 \
+        https://downloads.1password.com/linux/keys/1password.asc | \
+        gpg --dearmor > /tmp/1password.gpg && \
+      install -d -m 0755 /etc/apt/keyrings && \
+      mv /tmp/1password.gpg /etc/apt/keyrings/1password.gpg && \
+      printf 'deb [arch=%s signed-by=/etc/apt/keyrings/1password.gpg] https://downloads.1password.com/linux/debian/%s stable main\n' \
+        "$(dpkg --print-architecture)" "$(dpkg --print-architecture)" > /etc/apt/sources.list.d/1password.list && \
+      apt-get update && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends 1password-cli; \
+    fi
+
 # Expose the CLI binary without requiring npm global writes as non-root.
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
