@@ -1,12 +1,10 @@
 name: Build 1Password CLI image
 
 # Thin wrapper on top of the public ghcr.io/openclaw/openclaw image that adds
-# the 1Password CLI (scripts/docker/op/Dockerfile). Runs on a schedule so
-# hosts pulling ghcr.io/<owner>/openclaw:latest never need to build locally.
+# the 1Password CLI (scripts/docker/op/Dockerfile). Builds only when the v2
+# branch changes (or on manual dispatch).
 
 on:
-  schedule:
-    - cron: "17 4 * * *"
   workflow_dispatch: {}
   push:
     branches:
