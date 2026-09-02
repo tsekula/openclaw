@@ -1,9 +1,43 @@
+networks:
+  openclaw-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
 services:
+  gluetun:
+    image: qmcgaw/gluetun
+    container_name: openclaw-vpn
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${PROTONVPN_WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${PROTONVPN_WIREGUARD_ADDRESS}
+      - SERVER_COUNTRIES=${VPN_SERVER_COUNTRY:-Netherlands}
+      - FIREWALL_OUTBOUND_SUBNETS=172.20.0.0/16 # Allow openclaw network
+    ports:
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "${OPENCLAW_MSTEAMS_PORT:-3978}:3978"
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Enable host.docker.internal on Linux
+    networks:
+      - openclaw-net
+    restart: unless-stopped
+
   openclaw-gateway:
     # Prebuilt by .github/workflows/build-op-image.yml (scripts/docker/op/Dockerfile)
     # from the public ghcr.io/openclaw/openclaw image plus the 1Password CLI.
     # No local build: this is a straight `docker compose pull`.
     image: ${OPENCLAW_IMAGE:-ghcr.io/tsekula/openclaw:latest}
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
     env_file:
       - path: .env
         required: false
@@ -44,7 +78,16 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_TOKEN_LIFE_COACH: ${TELEGRAM_BOT_TOKEN_LIFE_COACH:-}
+      TELEGRAM_BOT_TOKEN_VISION: ${TELEGRAM_BOT_TOKEN_VISION:-}
+      TELEGRAM_BOT_TOKEN_FAMILY_BOT: ${TELEGRAM_BOT_TOKEN_FAMILY_BOT:-}
+      TELEGRAM_BOT_TOKEN_LINUX: ${TELEGRAM_BOT_TOKEN_LINUX:-}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
       - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
@@ -52,28 +95,14 @@ services:
       - "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"
       - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}/gh_config:/home/node/.config/gh"
       - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}/op_config:/home/node/.config/op"
-      ## Uncomment the lines below to enable sandbox isolation
-      ## (agents.defaults.sandbox). Requires Docker CLI in the image
-      ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
-      ## scripts/docker/setup.sh with OPENCLAW_SANDBOX=1 for automated setup.
-      ## Set DOCKER_GID to the host's docker group GID (run: stat -c '%g' /var/run/docker.sock).
-      # - /var/run/docker.sock:/var/run/docker.sock
-    # group_add:
-    #   - "${DOCKER_GID:-999}"
-    # Let bundled local-model providers reach host-side LM Studio/Ollama via
-    # http://host.docker.internal:<port>. Docker Desktop usually provides this
-    # alias; the host-gateway mapping makes it work on Linux Docker Engine too.
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "988" # Docker group ID - check yours with: getent group docker | cut -d: -f3
     cap_drop:
       - NET_RAW
       - NET_ADMIN
     security_opt:
       - no-new-privileges:true
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
-      - "${OPENCLAW_MSTEAMS_PORT:-3978}:3978"
     init: true
     restart: unless-stopped
     command:
@@ -127,7 +156,16 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      BRAVE_API_KEY: ${BRAVE_API_KEY:-}
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_TOKEN_LIFE_COACH: ${TELEGRAM_BOT_TOKEN_LIFE_COACH:-}
+      TELEGRAM_BOT_TOKEN_VISION: ${TELEGRAM_BOT_TOKEN_VISION:-}
+      TELEGRAM_BOT_TOKEN_FAMILY_BOT: ${TELEGRAM_BOT_TOKEN_FAMILY_BOT:-}
+      TELEGRAM_BOT_TOKEN_LINUX: ${TELEGRAM_BOT_TOKEN_LINUX:-}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
       - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
@@ -140,3 +178,25 @@ services:
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway
+
+  openclaw-browser:
+    build:
+      context: .
+      dockerfile: scripts/docker/sandbox/Dockerfile.browser
+    networks:
+      openclaw-net:
+        ipv4_address: 172.20.0.10
+    environment:
+      OPENCLAW_BROWSER_HEADLESS: "0"
+      OPENCLAW_BROWSER_CDP_PORT: "9222"
+      OPENCLAW_BROWSER_VNC_PORT: "5900"
+      OPENCLAW_BROWSER_NOVNC_PORT: "6080"
+      OPENCLAW_BROWSER_ENABLE_NOVNC: "1"
+      OPENCLAW_BROWSER_EXTRA_ARGS: "--remote-allow-origins=*"
+      OPENCLAW_BROWSER_CDP_SOURCE_RANGE: "172.20.0.0/16"
+      OPENCLAW_BROWSER_NOVNC_PASSWORD: ${BROWSER_NOVNC_PASSWORD}
+    ports:
+      - "9222:9222"
+      - "6080:6080"
+    init: true
+    restart: unless-stopped
