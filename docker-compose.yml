@@ -1,7 +1,9 @@
 services:
   openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
-    build: .
+    # Prebuilt by .github/workflows/build-op-image.yml (scripts/docker/op/Dockerfile)
+    # from the public ghcr.io/openclaw/openclaw image plus the 1Password CLI.
+    # No local build: this is a straight `docker compose pull`.
+    image: ${OPENCLAW_IMAGE:-ghcr.io/tsekula/openclaw:latest}
     env_file:
       - path: .env
         required: false
@@ -42,11 +44,14 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
       - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
       - "${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace"
       - "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"
+      - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}/gh_config:/home/node/.config/gh"
+      - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}/op_config:/home/node/.config/op"
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -94,7 +99,7 @@ services:
       start_period: 20s
 
   openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    image: ${OPENCLAW_IMAGE:-ghcr.io/tsekula/openclaw:latest}
     network_mode: "service:openclaw-gateway"
     env_file:
       - path: .env
@@ -122,11 +127,13 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
       - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
       - "${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace"
       - "${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw"
+      - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}/gh_config:/home/node/.config/gh"
     stdin_open: true
     tty: true
     init: true
