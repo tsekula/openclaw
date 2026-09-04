@@ -54,6 +54,7 @@ services:
       TELEGRAM_BOT_TOKEN_LINUX: ${TELEGRAM_BOT_TOKEN_LINUX:-}
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
       CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+      SEVDESK_API_KEY: ${SEVDESK_API_KEY:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
       - "${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw"
