@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
+  ProviderHttpError,
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
@@ -14,16 +15,13 @@ import {
   withTrustedWebSearchEndpoint,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  buildParallelCacheKey,
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   executeParallelSearchRequest,
-  normalizeParallelClientModel,
-  normalizeParallelObjective,
-  normalizeParallelResults,
-  normalizeParallelSearchQueries,
   type ParallelSearchResponse,
-  resolveParallelSearchCount,
 } from "./parallel-search-normalize.js";
 
 const PARALLEL_BASE_URL = "https://api.parallel.ai";
@@ -44,13 +42,6 @@ type ParallelConfig = {
   apiKey?: string;
   baseUrl?: string;
 };
-
-function resolveParallelConfig(searchConfig?: SearchConfigRecord): ParallelConfig {
-  const parallel = searchConfig?.parallel;
-  return parallel && typeof parallel === "object" && !Array.isArray(parallel)
-    ? (parallel as ParallelConfig)
-    : {};
-}
 
 function resolveParallelApiKey(parallel?: ParallelConfig): string | undefined {
   return (
@@ -160,8 +151,10 @@ async function runParallelSearch(params: {
         // otherwise rewrite the name first and hide the shape from the
         // structured matcher), then the canonical tool-payload redactor applies
         // the operator's logging.redactPatterns on top of the built-in defaults.
-        throw new Error(
+        params.signal?.throwIfAborted();
+        throw new ProviderHttpError(
           `Parallel API error (${res.status}): ${redactToolPayloadText(redactSensitiveText(detail || res.statusText, { mode: "tools" }))}`,
+          { status: res.status },
         );
       }
       return await readProviderJsonResponse<ParallelSearchResponse>(res, "Parallel API", {
@@ -181,7 +174,7 @@ export async function executeParallelWebSearchProviderTool(
     "parallel",
     resolveProviderWebSearchPluginConfig(ctx.config, "parallel"),
   ) as SearchConfigRecord | undefined;
-  const parallelConfig = resolveParallelConfig(searchConfig);
+  const parallelConfig = asOptionalRecord(searchConfig?.parallel);
   const apiKey = resolveParallelApiKey(parallelConfig);
   if (!apiKey) {
     return missingParallelKeyPayload();
@@ -209,16 +202,3 @@ export async function executeParallelWebSearchProviderTool(
       }),
   });
 }
-
-export const testing = {
-  buildParallelCacheKey,
-  missingParallelKeyPayload,
-  normalizeParallelClientModel,
-  normalizeParallelObjective,
-  normalizeParallelResults,
-  normalizeParallelSearchQueries,
-  resolveParallelApiKey,
-  resolveParallelSearchCount,
-  resolveParallelSearchEndpoint,
-  PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES,
-} as const;

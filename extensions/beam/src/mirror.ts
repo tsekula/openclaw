@@ -14,8 +14,8 @@ import {
   GuardedFetchRedirectError,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { clampNumber, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BEAM_MAX_BODY_BYTES,
   BEAM_MAX_ITEM_CHARS,
@@ -23,6 +23,7 @@ import {
   BEAM_MAX_SESSIONS,
   BEAM_RETENTION_MS,
   type BeamTranscriptItem,
+  type BeamSourceModel,
   type BeamUpload,
 } from "./types.js";
 
@@ -67,13 +68,6 @@ const MIRROR_KEYS = new Set([
   "activeWindowMinutes",
 ]);
 
-function boundedNumber(value: unknown, fallback: number, min: number, max: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, value));
-}
-
 /** Returns the mirror config, undefined when mirroring is not configured, or an error string. */
 export function parseBeamMirrorConfig(
   config: ReturnType<PluginRuntime["config"]["current"]>,
@@ -106,19 +100,17 @@ export function parseBeamMirrorConfig(
   if (
     !Array.isArray(mirror.catalogs) ||
     mirror.catalogs.length === 0 ||
-    mirror.catalogs.some((id) => typeof id !== "string" || !id.trim())
+    !mirror.catalogs.every((id): id is string => typeof id === "string" && id.trim().length > 0)
   ) {
     return `${MIRROR_CONFIG_PATH}.catalogs must explicitly list the catalog ids to mirror`;
   }
-  const catalogs = mirror.catalogs.map((id) => (id as string).trim().toLowerCase());
   return {
     endpoint,
     ...(mirror.token !== undefined ? { token: mirror.token } : {}),
-    catalogs,
-    pollSeconds: boundedNumber(mirror.pollSeconds, DEFAULT_POLL_SECONDS, 10, 3_600),
-    activeWindowMinutes: boundedNumber(
-      mirror.activeWindowMinutes,
-      DEFAULT_ACTIVE_WINDOW_MINUTES,
+    catalogs: mirror.catalogs.map((id) => id.trim().toLowerCase()),
+    pollSeconds: clampNumber(asFiniteNumber(mirror.pollSeconds) ?? DEFAULT_POLL_SECONDS, 10, 3_600),
+    activeWindowMinutes: clampNumber(
+      asFiniteNumber(mirror.activeWindowMinutes) ?? DEFAULT_ACTIVE_WINDOW_MINUTES,
       1,
       10_080,
     ),
@@ -194,10 +186,28 @@ export function fitBeamMirrorUpload(upload: BeamUpload): BeamUpload {
 type BeamMirrorCandidate = {
   catalogId: string;
   hostId: string;
+  modelProvider?: string;
   threadId: string;
   title: string;
   recencyAt: number;
 };
+
+function sourceModelForMirror(
+  providerValue: string | undefined,
+  items: readonly SessionCatalogTranscriptItem[],
+): BeamSourceModel | undefined {
+  const provider = providerValue?.trim().toLowerCase();
+  const rawModel = items.find((item) => item.type === "agentMessage" && item.model?.trim())?.model;
+  if (!provider || !/^[a-z0-9._-]+$/i.test(provider) || !rawModel) {
+    return undefined;
+  }
+  const prefixed = rawModel.trim();
+  const model = truncateUtf16Safe(
+    prefixed.startsWith(`${provider}/`) ? prefixed.slice(provider.length + 1) : prefixed,
+    256,
+  ).trim();
+  return model && /^\S+$/u.test(model) ? { provider, model } : undefined;
+}
 
 function mirrorCandidateKey(candidate: BeamMirrorCandidate): string {
   return `${candidate.catalogId}\0${candidate.hostId}\0${candidate.threadId}`;
@@ -357,6 +367,7 @@ export function createBeamMirrorRunner(params: {
     );
     signal.throwIfAborted();
     const reduced = buildBeamMirrorItems(transcript.items);
+    const sourceModel = sourceModelForMirror(candidate.modelProvider, transcript.items);
     const items = reduced.items.length
       ? reduced.items
       : [{ type: "other" as const, text: "no shareable messages yet" }];
@@ -367,6 +378,7 @@ export function createBeamMirrorRunner(params: {
       title: truncateUtf16Safe(redactToolPayloadText(candidate.title), 160),
       updatedAt: new Date(candidate.recencyAt || now()).toISOString(),
       completed,
+      ...(sourceModel ? { sourceModel } : {}),
       ...(reduced.truncated || transcript.nextCursor ? { truncated: true } : {}),
       items,
     });
@@ -455,6 +467,7 @@ export function createBeamMirrorRunner(params: {
               const candidate = {
                 catalogId: catalog.id,
                 hostId: host.hostId,
+                modelProvider: session.modelProvider,
                 threadId: session.threadId,
                 title: session.name?.trim() || `${catalog.id} session`,
                 recencyAt: session.recencyAt ?? session.updatedAt ?? 0,
@@ -591,7 +604,9 @@ export function createBeamMirrorService(params: { runtime: PluginRuntime }): {
         void runner?.tick();
       }, mirror.pollSeconds * 1_000);
       interval.unref?.();
-      ctx.logger.info(`beam mirror active: ${mirror.catalogs.join(", ")} -> ${mirror.endpoint}`);
+      ctx.logger.info(
+        `beam mirror active: ${mirror.catalogs.join(", ")} -> ${new URL(mirror.endpoint).origin}`,
+      );
       void runner.tick();
     },
     stop() {

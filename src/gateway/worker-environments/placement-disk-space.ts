@@ -3,6 +3,7 @@ import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protoc
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { StaleWorkerBuildError } from "./admission.js";
 import type { WorkerPlacementDiskSpaceReader } from "./placement-projector.js";
 import type {
   WorkerSessionPlacementRecord,
@@ -36,8 +37,10 @@ type DiskSpaceObservation = {
   snapshot: SessionPlacementDiskSpace;
 };
 
+type PlacementBinding = Omit<DiskSpaceObservation, "snapshot">;
+
 function hasExactBinding(
-  observation: DiskSpaceObservation,
+  observation: PlacementBinding,
   placement: WorkerSessionPlacementRecord | undefined,
 ): placement is ActivePlacement {
   return (
@@ -103,12 +106,13 @@ function parseDiskSpaceProbe(stdout: string, observedAtMs: number): SessionPlace
 }
 
 export function createWorkerPlacementDiskSpaceMonitor(params: {
-  placements: Pick<WorkerSessionPlacementStore, "get" | "list">;
+  placements: Pick<WorkerSessionPlacementStore, "get" | "readChangeSnapshot" | "readProjection">;
   environments: Pick<WorkerEnvironmentService, "startTunnel">;
   warn: (message: string) => void;
   now?: () => number;
 }) {
   const observations = new Map<string, DiskSpaceObservation>();
+  const staleBindings = new Map<string, PlacementBinding>();
   const now = params.now ?? Date.now;
   let observationVersion = 0;
 
@@ -120,6 +124,11 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   };
 
   const probe = async (placement: ActivePlacement): Promise<void> => {
+    // A stale worker build cannot recover until its placement binding changes.
+    const stale = staleBindings.get(placement.sessionId);
+    if (stale && hasExactBinding(stale, placement)) {
+      return;
+    }
     const tunnel = await params.environments.startTunnel({
       environmentId: placement.environmentId,
       ownerEpoch: placement.activeOwnerEpoch,
@@ -142,16 +151,14 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     if (!hasExactBinding(candidate, current)) {
       return;
     }
-    const previous = observations.get(placement.sessionId);
-    const previousStatus =
-      previous && hasExactBinding(previous, current) ? previous.snapshot.status : undefined;
+    const previous = read(current);
+    const previousStatus = previous?.status;
     const snapshotChanged =
       !previous ||
-      !hasExactBinding(previous, current) ||
-      previous.snapshot.status !== snapshot.status ||
-      previous.snapshot.availableBytes !== snapshot.availableBytes ||
-      previous.snapshot.totalBytes !== snapshot.totalBytes ||
-      previous.snapshot.observedAtMs !== snapshot.observedAtMs;
+      previous.status !== snapshot.status ||
+      previous.availableBytes !== snapshot.availableBytes ||
+      previous.totalBytes !== snapshot.totalBytes ||
+      previous.observedAtMs !== snapshot.observedAtMs;
     observations.set(placement.sessionId, candidate);
     if (snapshotChanged) {
       observationVersion += 1;
@@ -169,14 +176,23 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   };
 
   const sweep = async (): Promise<void> => {
-    const placements = params.placements.list();
-    const active = placements.filter(
-      (placement): placement is ActivePlacement => placement.state === "active",
+    const identities = await params.placements.readChangeSnapshot();
+    const projection = await params.placements.readProjection(
+      identities.map(({ sessionId }) => sessionId),
+      { current: true },
     );
+    const active = identities
+      .map(({ sessionId }) => projection.placements.get(sessionId))
+      .filter((placement): placement is ActivePlacement => placement?.state === "active");
     for (const [sessionId, observation] of observations) {
       if (!hasExactBinding(observation, params.placements.get(sessionId))) {
         observations.delete(sessionId);
         observationVersion += 1;
+      }
+    }
+    for (const [sessionId, binding] of staleBindings) {
+      if (!hasExactBinding(binding, params.placements.get(sessionId))) {
+        staleBindings.delete(sessionId);
       }
     }
     const tasks = active.map((placement) => () => probe(placement));
@@ -185,6 +201,9 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
       limit: DISK_SPACE_PROBE_CONCURRENCY,
       onTaskError: (error, index) => {
         const placement = active[index];
+        if (placement && error instanceof StaleWorkerBuildError) {
+          staleBindings.set(placement.sessionId, { ...placement });
+        }
         params.warn(
           `Worker disk-space probe failed${placement ? ` (${placement.sessionId})` : ""}: ${formatErrorMessage(error)}`,
         );

@@ -1,17 +1,14 @@
 // Runs the full live Vitest suite with live-test env and heartbeat output.
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
+import { resolveVitestNoOutputTimeoutMs } from "./lib/vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
-import { resolveVitestNoOutputTimeoutMs } from "./run-vitest.mts";
 import {
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mts";
 
-/**
- * Renders CLI usage for the live-test wrapper.
- */
 function testLiveUsage() {
   return [
     "Usage: node --import tsx scripts/test-live.mts [options] [--] [vitest targets/args...]",
@@ -27,9 +24,6 @@ function testLiveUsage() {
   ].join("\n");
 }
 
-/**
- * Parses live-test wrapper flags and forwarded Vitest args.
- */
 export function parseTestLiveArgs(argv: string[]) {
   const forwardedArgs: string[] = [];
   let quietOverride: "0" | "1" | undefined;
@@ -74,9 +68,6 @@ export function parseTestLiveArgs(argv: string[]) {
 
 export type TestLiveArgs = ReturnType<typeof parseTestLiveArgs>;
 
-/**
- * Builds env for live tests, including quiet mode and Codex harness opt-in.
- */
 export function buildTestLiveEnv(args: TestLiveArgs, baseEnv = process.env) {
   return {
     ...baseEnv,
@@ -89,9 +80,6 @@ export function buildTestLiveEnv(args: TestLiveArgs, baseEnv = process.env) {
   };
 }
 
-/**
- * Reads the live-test heartbeat interval.
- */
 export function resolveTestLiveHeartbeatMs(baseEnv = process.env) {
   const value = baseEnv.OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS;
   if (value === undefined || value === "") {
@@ -108,16 +96,6 @@ export function resolveTestLiveHeartbeatMs(baseEnv = process.env) {
   return parsed;
 }
 
-/**
- * Reads the live-test no-output timeout using the shared Vitest watchdog contract.
- */
-export function resolveTestLiveNoOutputTimeoutMs(baseEnv = process.env) {
-  return resolveVitestNoOutputTimeoutMs(baseEnv);
-}
-
-/**
- * Builds pnpm/vitest args for full live test execution.
- */
 export function buildTestLivePnpmArgs(args: TestLiveArgs) {
   return [
     "exec",
@@ -129,9 +107,6 @@ export function buildTestLivePnpmArgs(args: TestLiveArgs) {
   ];
 }
 
-/**
- * Builds spawn options for the live-test Vitest child.
- */
 export function buildTestLiveSpawnParams(env: NodeJS.ProcessEnv, platform = process.platform) {
   return {
     detached: shouldUseDetachedVitestProcessGroup(platform),
@@ -140,9 +115,6 @@ export function buildTestLiveSpawnParams(env: NodeJS.ProcessEnv, platform = proc
   } satisfies Pick<PnpmRunnerParams, "detached" | "env" | "stdio">;
 }
 
-/**
- * Runs the live-test wrapper process.
- */
 export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   const args = parseTestLiveArgs(argv);
   if (args.help) {
@@ -152,33 +124,30 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
 
   const env = buildTestLiveEnv(args, baseEnv);
   const heartbeatMs = resolveTestLiveHeartbeatMs(baseEnv);
-  const noOutputTimeoutMs = resolveTestLiveNoOutputTimeoutMs(baseEnv);
+  const noOutputTimeoutMs = resolveVitestNoOutputTimeoutMs(baseEnv);
   const startedAt = Date.now();
   let lastOutputAt = startedAt;
   let lastHeartbeatAt = startedAt;
   let timedOut = false;
 
   const spawnParams = buildTestLiveSpawnParams(env);
+  const pnpmArgs = buildTestLivePnpmArgs(args);
   const { child, completion } = spawnOwnedVitestProcess({
     ...createPnpmRunnerSpawnSpec({
-      pnpmArgs: buildTestLivePnpmArgs(args),
+      pnpmArgs,
       ...spawnParams,
     }),
-    homeMode: resolveVitestHomeSelection(buildTestLivePnpmArgs(args), { env }),
+    homeMode: resolveVitestHomeSelection(pnpmArgs, { env }),
   });
-  let forwardedSignal: NodeJS.Signals | null = null;
-  const teardownChildCleanup = installVitestProcessGroupCleanup({
+  const childCleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
     forceSignalDelayMs: 100,
-    onSignal: (signal) => {
-      forwardedSignal ??= signal;
-    },
   });
 
   const teardown = () => {
     clearInterval(heartbeat);
-    teardownChildCleanup();
+    childCleanup.teardown();
   };
 
   const noteOutput = () => {
@@ -225,6 +194,7 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
 
   completion.finally(teardown).then(
     ({ code, signal }) => {
+      const forwardedSignal = childCleanup.getForwardedSignal();
       if (forwardedSignal) {
         process.kill(process.pid, forwardedSignal);
         return;

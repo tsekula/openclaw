@@ -12,6 +12,7 @@ import {
   collectChannelSchemaMetadataCore,
   collectPluginSchemaMetadataCore,
 } from "../config/channel-config-metadata.js";
+import { resolveChannelSchemaSelection } from "../config/channel-schema-selection.js";
 import { REDACTED_SENTINEL, redactConfigObject } from "../config/redact-snapshot.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -75,20 +76,29 @@ const invalidConfigRedactionMetadata: SystemAgentConfigRedactionMetadata = {
   ...baseConfigRedactionMetadata,
   channelIds: new Set(),
 };
+// Inventory survives config reloads; the selected channel schemas do not.
+// Bind cached redaction to both snapshots so path classification follows the current owner.
 const metadataConfigRedaction = new WeakMap<
   PluginMetadataSnapshot,
-  SystemAgentConfigRedactionMetadata
+  WeakMap<object, SystemAgentConfigRedactionMetadata>
 >();
 
 function resolveMetadataConfigRedaction(
   snapshot: PluginMetadataSnapshot,
+  config?: OpenClawConfig,
 ): SystemAgentConfigRedactionMetadata {
-  const cached = metadataConfigRedaction.get(snapshot);
+  const byConfig =
+    metadataConfigRedaction.get(snapshot) ??
+    new WeakMap<object, SystemAgentConfigRedactionMetadata>();
+  const cached = byConfig.get(config ?? snapshot);
   if (cached) {
     return cached;
   }
   const plugins = collectPluginSchemaMetadataCore(snapshot.manifestRegistry);
-  const channels = collectChannelSchemaMetadataCore(snapshot.manifestRegistry);
+  const channels = collectChannelSchemaMetadataCore(
+    snapshot.manifestRegistry,
+    config ? resolveChannelSchemaSelection(snapshot.manifestRegistry, config) : undefined,
+  );
   const schema = buildConfigSchemaCore({ plugins, channels });
   const uiHints = schema.uiHints;
   const metadata = {
@@ -111,7 +121,8 @@ function resolveMetadataConfigRedaction(
         .map((channel) => channel.id),
     ]),
   };
-  metadataConfigRedaction.set(snapshot, metadata);
+  byConfig.set(config ?? snapshot, metadata);
+  metadataConfigRedaction.set(snapshot, byConfig);
   return metadata;
 }
 
@@ -137,7 +148,12 @@ function resolveSystemAgentConfigRedactionMetadata(
     env: process.env,
     allowWorkspaceScopedSnapshot: true,
   });
-  return snapshot ? resolveMetadataConfigRedaction(snapshot) : baseConfigRedactionMetadata;
+  return snapshot ? resolveMetadataConfigRedaction(snapshot, config) : baseConfigRedactionMetadata;
+}
+
+/** The same active schema owns both setting help and sensitive-value classification. */
+export function resolveSystemAgentConfigSchema(): ConfigSchemaResponse {
+  return resolveSystemAgentConfigRedactionMetadata().schema;
 }
 
 function splitConfigHintPath(path: string): string[] {
@@ -190,24 +206,6 @@ function isDynamicOwnerIdSegment(path: readonly string[], index: number): boolea
   );
 }
 
-function hasSensitiveHintSegmentPrefix(
-  path: readonly string[],
-  index: number,
-  metadata: SystemAgentConfigRedactionMetadata,
-): boolean {
-  const segment = path[index];
-  if (segment === undefined) {
-    return false;
-  }
-  for (let end = 1; end < segment.length; end += 1) {
-    const prefixPath = [...path.slice(0, index), segment.slice(0, end)];
-    if (metadata.sensitiveHintPaths.some((hintPath) => matchesHintPath(hintPath, prefixPath))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function isKernelPassthroughSegment(path: readonly string[], index: number): boolean {
   return (
     (path[0] === "hooks" && path[1] === "entries" && (index === 2 || index === 3)) ||
@@ -228,7 +226,7 @@ function isSchemaDynamicSegment(
   // Zod passthrough/catchall objects become untyped in the public form schema.
   // These exact core containers still own arbitrary entry ids and child keys.
   if (isKernelPassthroughSegment(path, index)) {
-    return !hasSensitiveHintSegmentPrefix(path, index, metadata);
+    return !hasSensitiveSegmentPrefix(path, index, metadata, true);
   }
   const segment = path[index];
   if (segment === undefined) {
@@ -236,7 +234,7 @@ function isSchemaDynamicSegment(
   }
   const kind = classifyConfigSchemaPathSegment(metadata.schema, path.slice(0, index), segment);
   if (kind === "record-key" || kind === "array-index") {
-    return !hasSensitiveHintSegmentPrefix(path, index, metadata);
+    return !hasSensitiveSegmentPrefix(path, index, metadata, true);
   }
   if (kind === "invalid-record-key") {
     return false;
@@ -345,9 +343,10 @@ function isSensitiveConfigPathParts(
 }
 
 function hasSensitiveSegmentPrefix(
-  parsedPath: string[],
+  parsedPath: readonly string[],
   index: number,
   metadata: SystemAgentConfigRedactionMetadata,
+  hintsOnly = false,
 ): boolean {
   const segment = parsedPath[index];
   if (segment === undefined) {
@@ -357,8 +356,8 @@ function hasSensitiveSegmentPrefix(
     const prefixPath = [...parsedPath.slice(0, index), segment.slice(0, end)];
     const canonicalPath = prefixPath.join(".");
     if (
-      isSensitiveConfigPath(canonicalPath) ||
-      isSensitiveUrlConfigPath(canonicalPath) ||
+      (!hintsOnly &&
+        (isSensitiveConfigPath(canonicalPath) || isSensitiveUrlConfigPath(canonicalPath))) ||
       metadata.sensitiveHintPaths.some((hintPath) => matchesHintPath(hintPath, prefixPath))
     ) {
       return true;

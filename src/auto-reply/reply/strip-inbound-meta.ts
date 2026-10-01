@@ -1,5 +1,6 @@
 // Generated inbound context is current-turn model input, never historical display text.
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { escapeRegExp } from "../../shared/regexp.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./delivery-hints.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
@@ -9,6 +10,12 @@ const CHANNEL_CONTEXT_HEADER = `Context: ${INBOUND_CONTEXT_MARKER}`;
 const ACTIVE_MEMORY_CONTEXT_HEADER = "Context:";
 const ACTIVE_MEMORY_OPEN_TAG = "<active_memory_plugin>";
 const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
+export const INBOUND_METADATA_MARKERS = [
+  "[",
+  INBOUND_CONTEXT_MARKER,
+  ...MESSAGE_TOOL_DELIVERY_HINTS,
+  ACTIVE_MEMORY_CONTEXT_HEADER,
+];
 const METADATA_TOKENS_RE = new RegExp(
   [INBOUND_CONTEXT_MARKER, ...MESSAGE_TOOL_DELIVERY_HINTS].map(escapeRegExp).join("|"),
   "g",
@@ -227,14 +234,12 @@ export function extractInboundSenderLabel(text: string): string | null {
     return label;
   }
   const conversationSender = parseInboundMetaBlock(text, "Conversation info:")?.sender;
-  return conversationSender &&
-    typeof conversationSender === "object" &&
-    !Array.isArray(conversationSender)
+  return isRecord(conversationSender)
     ? firstNonEmptyString(
-        (conversationSender as Record<string, unknown>).name,
-        (conversationSender as Record<string, unknown>).username,
-        (conversationSender as Record<string, unknown>).e164,
-        (conversationSender as Record<string, unknown>).id,
+        conversationSender.name,
+        conversationSender.username,
+        conversationSender.e164,
+        conversationSender.id,
       )
     : firstNonEmptyString(conversationSender);
 }

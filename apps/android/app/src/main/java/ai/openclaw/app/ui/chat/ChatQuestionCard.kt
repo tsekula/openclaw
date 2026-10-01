@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
@@ -141,7 +142,7 @@ private fun SecretStoreConsent(
         onValueChange = { value -> onDraftChanged { it.copy(secretStoreAllowedHostsText = value) } },
         modifier = Modifier.fillMaxWidth(),
         enabled = enabled,
-        label = { Text(nativeString("Allowed HTTPS hosts"), style = ClawTheme.type.body) },
+        label = { Text(nativeString("Allowed HTTPS hosts"), style = ClawTheme.type.body.copy(fontSize = LocalTextStyle.current.fontSize)) },
         placeholder = { Text(nativeString("api.example.com, uploads.example.com"), style = ClawTheme.type.body) },
         textStyle = ClawTheme.type.body,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -234,9 +235,6 @@ private fun QuestionSection(
       }
     }
     if (question.options.isEmpty() || question.isOther == true) {
-      // Secret answers must never render on screen or feed the keyboard's
-      // prediction/autocorrect stores; password transformation + keyboard type
-      // cover both, and single-line keeps the masked value one obscured run.
       val secret = question.isSecret == true
       OutlinedTextField(
         value = draft.otherText[question.questionId].orEmpty(),
@@ -246,7 +244,7 @@ private fun QuestionSection(
         label = { Text(if (secret) nativeString("Secret value") else nativeString("Other answer")) },
         visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions =
-          if (secret) KeyboardOptions(keyboardType = KeyboardType.Password) else KeyboardOptions.Default,
+          if (secret) KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false) else KeyboardOptions.Default,
         minLines = 1,
         maxLines = if (secret) 1 else 4,
       )
@@ -264,34 +262,32 @@ private fun QuestionFooter(
   onSkip: (ChatQuestionPrompt) -> Unit,
 ) {
   val answers = draft.answers(prompt.record.questions)
-  if (status == ChatQuestionStatus.Pending || status == ChatQuestionStatus.Submitting) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-      Text(
-        text = questionCountdown(prompt.record.expiresAtMs, nowMs),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-      )
-      Spacer(Modifier.weight(1f))
-      TextButton(
-        onClick = { onSkip(prompt) },
-        enabled = status == ChatQuestionStatus.Pending,
-      ) {
-        Text(nativeString("Skip"))
-      }
-      ClawPrimaryButton(
-        text =
-          if (status == ChatQuestionStatus.Submitting && !prompt.skipping) {
-            nativeString("Submitting…")
-          } else {
-            nativeString("Submit")
-          },
-        onClick = { answers?.let { onSubmit(prompt, it) } },
-        enabled = answers != null && status == ChatQuestionStatus.Pending,
-      )
+  Row(verticalAlignment = Alignment.CenterVertically) {
+    Text(
+      text = questionCountdown(prompt.record.expiresAtMs, nowMs),
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textMuted,
+    )
+    Spacer(Modifier.weight(1f))
+    TextButton(
+      onClick = { onSkip(prompt) },
+      enabled = status == ChatQuestionStatus.Pending,
+    ) {
+      Text(nativeString("Skip"))
     }
-    prompt.errorText?.let { error ->
-      Text(text = error, style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
-    }
+    ClawPrimaryButton(
+      text =
+        if (status == ChatQuestionStatus.Submitting && !prompt.skipping) {
+          nativeString("Submitting…")
+        } else {
+          nativeString("Submit")
+        },
+      onClick = { answers?.let { onSubmit(prompt, it) } },
+      enabled = answers != null && status == ChatQuestionStatus.Pending,
+    )
+  }
+  prompt.errorText?.let { error ->
+    Text(text = error, style = ClawTheme.type.caption, color = ClawTheme.colors.danger)
   }
 }
 
@@ -312,8 +308,6 @@ internal fun terminalQuestionAnswer(
   return if (status == ChatQuestionStatus.AnsweredElsewhere) nativeString("Answered elsewhere") else nativeString("Answered")
 }
 
-// nativeString is the non-composable resource accessor (nativeStringResource
-// is the @Composable variant), so this helper is safe outside composition.
 internal fun questionCountdown(
   expiresAtMs: Long,
   nowMs: Long,

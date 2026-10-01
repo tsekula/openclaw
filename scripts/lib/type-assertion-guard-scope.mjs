@@ -120,7 +120,6 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "src/agents/model-auth-model.ts", // Null Authorization sentinel crosses the SDK's string-only header type.
   "src/agents/model-provider-auth.ts", // Route-fact cache keys cross a config-only hash API.
   "src/agents/modes/interactive/theme/theme.ts", // Global symbol registry and Proxy receiver bridge duplicate module copies.
-  "src/agents/subagents/spawn/subagent-depth.ts", // Generic session projections cross the fixed accessor entry type.
   "src/agents/tool-search-transcript.ts", // Synthetic target turns omit provider-owned assistant metadata.
   "src/channels/plugins/config-schema.ts", // Public SDK Zod generics preserve caller schema identity.
   "src/commands/channel-test-registry.ts", // Test support.
@@ -133,7 +132,6 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "src/gateway/mcp-app-standalone-host.ts", // Generated standalone browser code bridges the DOM namespace.
   "src/gateway/server-methods/chat-transcript-inject.ts", // Gateway media blocks exceed the canonical message content union.
   "src/gateway/test-http-response.ts", // Test support.
-  "src/infra/backup-volatile-stat-cache.ts", // node-tar's cache expects full Stats for a synthetic sentinel.
   "src/infra/diagnostic-trace-propagation.ts", // Global symbol registry crosses module copies.
   "src/infra/net/runtime-fetch.ts", // Undici and DOM fetch types live in separate namespaces.
   "src/infra/state-migrations.meeting-transcripts-files.ts", // Legacy summary validation does not prove element types.

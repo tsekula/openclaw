@@ -1,4 +1,3 @@
-// Shares plugin activation state helpers across config and registry code.
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
 type PluginKindLike = string | readonly string[] | undefined;
@@ -17,6 +16,7 @@ type PluginActivationCause =
   | "plugins-disabled"
   | "blocked-by-denylist"
   | "disabled-in-config"
+  | "channel-disabled-in-config"
   | "workspace-disabled-by-default"
   | "not-in-allowlist"
   | "enabled-by-effective-config"
@@ -61,6 +61,7 @@ const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> =
   "plugins-disabled": "plugins disabled",
   "blocked-by-denylist": "blocked by denylist",
   "disabled-in-config": "disabled in config",
+  "channel-disabled-in-config": "channel disabled in config",
   "workspace-disabled-by-default": "workspace plugin (disabled by default)",
   "not-in-allowlist": "not in allowlist",
   "enabled-by-effective-config": "enabled by effective config",
@@ -68,16 +69,6 @@ const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> =
   "bundled-default-enablement": "bundled default enablement",
   "bundled-disabled-by-default": "bundled (disabled by default)",
 };
-
-function resolvePluginActivationReason(
-  cause?: PluginActivationCause,
-  reason?: string,
-): string | undefined {
-  if (reason) {
-    return reason;
-  }
-  return cause ? PLUGIN_ACTIVATION_REASON_BY_CAUSE[cause] : undefined;
-}
 
 export function toPluginActivationState(
   decision: PluginActivationDecision,
@@ -87,7 +78,9 @@ export function toPluginActivationState(
     activated: decision.activated,
     explicitlyEnabled: decision.explicitlyEnabled,
     source: decision.source,
-    reason: resolvePluginActivationReason(decision.cause, decision.reason),
+    reason:
+      decision.reason ||
+      (decision.cause ? PLUGIN_ACTIVATION_REASON_BY_CAUSE[decision.cause] : undefined),
   };
 }
 
@@ -96,31 +89,34 @@ function resolveExplicitPluginSelectionShared<TRootConfig>(params: {
   origin: string;
   config: PluginActivationConfigLike;
   rootConfig?: TRootConfig;
-  isBundledChannelEnabledByChannelConfig: (
+  /** Manifest-owned channel ids; the plugin id alone cannot resolve `channels.<id>` for every owner. */
+  channelIds?: readonly string[];
+  resolveChannelConfigEnablement: (
     rootConfig: TRootConfig | undefined,
     pluginId: string,
-  ) => boolean;
-}): { explicitlyEnabled: boolean; cause?: PluginExplicitSelectionCause } {
+    channelIds?: readonly string[],
+  ) => boolean | undefined;
+}): PluginExplicitSelectionCause | undefined {
   const policyId = normalizePluginPolicyId(params.id);
   if (params.config.entries[policyId]?.enabled === true) {
-    return { explicitlyEnabled: true, cause: "enabled-in-config" };
+    return "enabled-in-config";
   }
   if (
     params.origin === "bundled" &&
-    params.isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
+    params.resolveChannelConfigEnablement(params.rootConfig, params.id, params.channelIds) === true
   ) {
-    return { explicitlyEnabled: true, cause: "bundled-channel-enabled-in-config" };
+    return "bundled-channel-enabled-in-config";
   }
   if (params.config.slots.memory === params.id) {
-    return { explicitlyEnabled: true, cause: "selected-memory-slot" };
+    return "selected-memory-slot";
   }
   if (params.config.slots.contextEngine === params.id) {
-    return { explicitlyEnabled: true, cause: "selected-context-engine-slot" };
+    return "selected-context-engine-slot";
   }
   if (params.origin !== "bundled" && params.config.allow.includes(policyId)) {
-    return { explicitlyEnabled: true, cause: "selected-in-allowlist" };
+    return "selected-in-allowlist";
   }
-  return { explicitlyEnabled: false };
+  return undefined;
 }
 
 export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
@@ -132,21 +128,25 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   activationSource?: PluginActivationConfigSourceLike<TRootConfig>;
   autoEnabledReason?: string;
   allowBundledChannelExplicitBypassesAllowlist?: boolean;
-  isBundledChannelEnabledByChannelConfig: (
+  /** Manifest-owned channel ids; the plugin id alone cannot resolve `channels.<id>` for every owner. */
+  channelIds?: readonly string[];
+  resolveChannelConfigEnablement: (
     rootConfig: TRootConfig | undefined,
     pluginId: string,
-  ) => boolean;
+    channelIds?: readonly string[],
+  ) => boolean | undefined;
 }): PluginActivationDecision {
   const activationSource = params.activationSource ?? {
     plugins: params.config,
     rootConfig: params.rootConfig,
   };
-  const explicitSelection = resolveExplicitPluginSelectionShared({
+  const explicitCause = resolveExplicitPluginSelectionShared({
     id: params.id,
     origin: params.origin,
     config: activationSource.plugins,
     rootConfig: activationSource.rootConfig,
-    isBundledChannelEnabledByChannelConfig: params.isBundledChannelEnabledByChannelConfig,
+    channelIds: params.channelIds,
+    resolveChannelConfigEnablement: params.resolveChannelConfigEnablement,
   });
 
   // Keep result construction shared; policy precedence stays in the ordered branches below.
@@ -156,7 +156,7 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   ): PluginActivationDecision => ({
     enabled: source !== "disabled",
     activated: source !== "disabled",
-    explicitlyEnabled: explicitSelection.explicitlyEnabled,
+    explicitlyEnabled: explicitCause !== undefined,
     source,
     ...details,
   });
@@ -172,12 +172,23 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   if (entry?.enabled === false) {
     return decision("disabled", { cause: "disabled-in-config" });
   }
+  // An owner-wide channel disable wins over plugin enablement left by install/enable flows.
+  // Enabled or unspecified sibling channels must still be able to load their shared plugin.
+  if (
+    params.resolveChannelConfigEnablement(
+      activationSource.rootConfig ?? params.rootConfig,
+      params.id,
+      params.channelIds,
+    ) === false
+  ) {
+    return decision("disabled", { cause: "channel-disabled-in-config" });
+  }
   const explicitlyAllowed = params.config.allow.includes(policyId);
   if (
     params.origin === "workspace" &&
     !explicitlyAllowed &&
     entry?.enabled !== true &&
-    explicitSelection.cause !== "selected-context-engine-slot"
+    explicitCause !== "selected-context-engine-slot"
   ) {
     return decision("disabled", { cause: "workspace-disabled-by-default" });
   }
@@ -189,15 +200,15 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   }
   if (
     params.allowBundledChannelExplicitBypassesAllowlist === true &&
-    explicitSelection.cause === "bundled-channel-enabled-in-config"
+    explicitCause === "bundled-channel-enabled-in-config"
   ) {
-    return decision("explicit", { explicitlyEnabled: true, cause: explicitSelection.cause });
+    return decision("explicit", { explicitlyEnabled: true, cause: explicitCause });
   }
   if (params.config.allow.length > 0 && !explicitlyAllowed) {
     return decision("disabled", { cause: "not-in-allowlist" });
   }
-  if (explicitSelection.explicitlyEnabled) {
-    return decision("explicit", { explicitlyEnabled: true, cause: explicitSelection.cause });
+  if (explicitCause) {
+    return decision("explicit", { explicitlyEnabled: true, cause: explicitCause });
   }
   if (params.autoEnabledReason) {
     return decision("auto", { explicitlyEnabled: false, reason: params.autoEnabledReason });
@@ -207,7 +218,7 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   }
   if (
     params.origin === "bundled" &&
-    params.isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
+    params.resolveChannelConfigEnablement(params.rootConfig, params.id, params.channelIds) === true
   ) {
     return decision("auto", { explicitlyEnabled: false, cause: "bundled-channel-configured" });
   }
@@ -220,20 +231,13 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   return decision("default");
 }
 
-function hasKind(kind: PluginKindLike, target: string): boolean {
-  if (!kind) {
-    return false;
-  }
-  return Array.isArray(kind) ? kind.includes(target) : kind === target;
-}
-
 export function resolveMemorySlotDecisionShared(params: {
   id: string;
   kind?: PluginKindLike;
   slot: string | null | undefined;
   selectedId: string | null;
 }): { enabled: boolean; reason?: string; selected?: boolean } {
-  if (!hasKind(params.kind, "memory")) {
+  if (!(Array.isArray(params.kind) ? params.kind.includes("memory") : params.kind === "memory")) {
     return { enabled: true };
   }
   // A dual-kind plugin (e.g. ["memory", "context-engine"]) that lost the

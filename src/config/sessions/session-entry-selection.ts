@@ -1,12 +1,10 @@
 import { resolveSessionAuthProfileOverrideSource } from "./auth-profile-override-provenance.js";
 import { hasSessionActiveAutoModelFallback } from "./model-override-provenance.js";
-import type { SessionPatchProjectionSnapshot } from "./session-accessor.types.js";
+import type {
+  SessionPatchProjectionSnapshot,
+  SessionPatchProjectionTarget,
+} from "./session-accessor.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
-
-type SessionProjectionTarget = {
-  candidateKeys?: readonly string[];
-  primaryKey: string;
-};
 
 export class SessionLabelOwnerIndex {
   readonly #owners = new Map<string, Set<string>>();
@@ -55,6 +53,27 @@ export class SessionLabelOwnerIndex {
   }
 }
 
+type SessionModelOverrideSelection = Pick<
+  SessionEntry,
+  | "modelOverride"
+  | "providerOverride"
+  | "modelOverrideSource"
+  | "modelOverrideRouteResolution"
+  | "agentRuntimeOverride"
+>;
+
+export function selectSessionModelOverride(
+  entry: Partial<SessionModelOverrideSelection>,
+): SessionModelOverrideSelection {
+  return {
+    modelOverride: entry.modelOverride,
+    providerOverride: entry.providerOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
+    agentRuntimeOverride: entry.agentRuntimeOverride,
+  };
+}
+
 /** Carries only user/runtime selection into a new dashboard fork. */
 export function inheritSessionSelection(
   parentEntry: SessionEntry | undefined,
@@ -64,7 +83,10 @@ export function inheritSessionSelection(
   }
   const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(parentEntry);
   const inheritModelSelection = !hasSessionActiveAutoModelFallback(parentEntry);
-  const inheritAuthProfile = inheritModelSelection || authProfileOverrideSource === "user";
+  const inheritAuthProfile =
+    inheritModelSelection ||
+    authProfileOverrideSource === "user" ||
+    authProfileOverrideSource === "user-link";
   return {
     ...(inheritModelSelection && parentEntry.providerOverride
       ? { providerOverride: parentEntry.providerOverride }
@@ -96,13 +118,9 @@ export function inheritSessionSelection(
   };
 }
 
-function cloneOptionalSessionEntry(entry: SessionEntry | undefined): SessionEntry | undefined {
-  return entry ? structuredClone(entry) : undefined;
-}
-
 export function resolveProjectionExistingEntry(
   snapshot: SessionPatchProjectionSnapshot,
-  target: SessionProjectionTarget,
+  target: SessionPatchProjectionTarget,
 ): SessionEntry | undefined {
   const candidateKeys = target.candidateKeys ?? [target.primaryKey];
   let freshest: SessionEntry | undefined;
@@ -112,5 +130,5 @@ export function resolveProjectionExistingEntry(
       freshest = entry;
     }
   }
-  return cloneOptionalSessionEntry(freshest);
+  return freshest ? structuredClone(freshest) : undefined;
 }

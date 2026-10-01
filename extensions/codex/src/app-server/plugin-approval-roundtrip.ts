@@ -2,7 +2,10 @@
  * Routes Codex app-server plugin approval prompts through OpenClaw's gateway
  * approval tool and maps gateway decisions back to Codex outcomes.
  */
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  ExecApprovalDecision,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isApprovalNotFoundError, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
@@ -31,8 +34,6 @@ const DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE = new RegExp(
   String.raw`(?:\u001b\][^\u001b\u009c\u0007]*|\u009d[^\u001b\u009c\u0007]*|\u001b\[[0-?]*[ -/]*|\u009b[0-?]*[ -/]*|\u001b)$`,
 );
 
-export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
-
 export type CodexApprovalKind = "command" | "file-change" | "permissions" | "other";
 const CODEX_APPROVAL_TIMEOUT_SUBJECTS: Record<CodexApprovalKind, string> = {
   command: "Command approval",
@@ -53,10 +54,7 @@ export type AppServerApprovalOutcome =
   | "unavailable"
   | "cancelled";
 
-type ApprovalRequestResult = {
-  id?: string;
-  decision?: ExecApprovalDecision | null;
-};
+export type PluginApprovalOutcome = AppServerApprovalOutcome | "timed-out";
 
 /** Starts a two-phase plugin approval request through the OpenClaw gateway. */
 export async function requestPluginApproval(params: {
@@ -70,7 +68,7 @@ export async function requestPluginApproval(params: {
   allowedDecisions?: ExecApprovalDecision[];
   mcpTool?: { server: string; tool: string };
   isMcpToolApprovalActive?: () => boolean;
-}): Promise<ApprovalRequestResult | undefined> {
+}): ReturnType<AgentHarnessHostCapabilities["requestApproval"]> {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   return params.hostCapabilities.requestApproval({
     signal: params.signal,
@@ -88,7 +86,7 @@ export async function requestPluginApproval(params: {
     timeoutMs,
     transportTimeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs),
     ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),
-  }) as Promise<ApprovalRequestResult | undefined>;
+  });
 }
 
 /** Detects the gateway's explicit null-decision marker for unavailable approvals. */
@@ -149,7 +147,7 @@ export async function waitForPluginApprovalDecision(params: {
 /** Converts a gateway exec approval decision into the app-server approval outcome enum. */
 export function mapExecDecisionToOutcome(
   decision: ExecApprovalDecision | null | undefined,
-): AppServerApprovalOutcome {
+): Exclude<AppServerApprovalOutcome, "cancelled"> {
   switch (decision) {
     case "allow-once":
       return "approved-once";
@@ -159,6 +157,43 @@ export function mapExecDecisionToOutcome(
       return "denied";
     default:
       return "unavailable";
+  }
+}
+
+/** Runs one complete host approval request and maps transport failures to a closed outcome. */
+export async function requestPluginApprovalOutcome(
+  params: Omit<Parameters<typeof requestPluginApproval>[0], "severity">,
+): Promise<PluginApprovalOutcome> {
+  try {
+    const requestResult = await requestPluginApproval({
+      ...params,
+      severity: "warning",
+    });
+    const approvalId = requestResult?.id;
+    if (!approvalId) {
+      return "unavailable";
+    }
+    const approvalResult = approvalRequestExplicitlyUnavailable(requestResult)
+      ? undefined
+      : await waitForPluginApprovalDecision({
+          hostCapabilities: params.hostCapabilities,
+          approvalId,
+          signal: params.signal,
+        });
+    if (params.signal?.aborted) {
+      return "cancelled";
+    }
+    if (approvalResult?.terminalReason === "timeout") {
+      return "timed-out";
+    }
+    const decision = approvalResult?.decision;
+    return mapExecDecisionToOutcome(
+      decision === "allow-always" && params.allowedDecisions?.includes("allow-always") === false
+        ? "allow-once"
+        : decision,
+    );
+  } catch {
+    return params.signal?.aborted ? "cancelled" : "denied";
   }
 }
 

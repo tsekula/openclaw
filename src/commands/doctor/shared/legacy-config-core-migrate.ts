@@ -1,11 +1,11 @@
 // Core doctor compatibility migration pipeline for current config objects.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentRosterProperty } from "../../../agents/agent-scope-config.js";
-import { migrateLegacyContextBudgetConfig } from "../../../config/legacy.context-budget.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { HeartbeatSchema } from "../../../config/zod-schema.agent-runtime.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
 import { migrateLegacySecretRefEnvMarkers } from "../../../secrets/legacy-secretref-env-marker.js";
+import { migrateLegacyCommandOwners } from "../../doctor-command-owner.js";
 import { applyChannelDoctorCompatibilityMigrations } from "./channel-legacy-config-migrate.js";
 import type { LegacyCodexModelIdentity } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
@@ -116,7 +116,6 @@ export function normalizeCompatibilityConfigValues(
   options: {
     blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
     sourceRaw?: unknown;
-    sourceConfigBeforeMigrations?: unknown;
   } = {},
 ): {
   config: OpenClawConfig;
@@ -124,22 +123,7 @@ export function normalizeCompatibilityConfigValues(
   warnings?: string[];
 } {
   const changes: string[] = [];
-  let contextBudgetConfig = cfg;
-  let contextBudgetWarnings: string[];
-  if (options.sourceConfigBeforeMigrations === undefined) {
-    const migration = migrateLegacyContextBudgetConfig(cfg);
-    contextBudgetConfig = migration.config;
-    changes.push(...migration.changes.map(({ message }) => message));
-    contextBudgetWarnings = migration.warnings.map(({ message }) => message);
-  } else {
-    const migration = migrateLegacyContextBudgetConfig(options.sourceConfigBeforeMigrations);
-    changes.push(...migration.changes.map(({ message }) => message));
-    contextBudgetWarnings = migration.warnings.map(({ message }) => message);
-  }
-  const reservedMcpServerNames = migrateReservedMcpServerNames(
-    contextBudgetConfig,
-    options.sourceRaw,
-  );
+  const reservedMcpServerNames = migrateReservedMcpServerNames(cfg, options.sourceRaw);
   changes.push(...reservedMcpServerNames.changes);
   let next = normalizeBaseCompatibilityConfigValues(
     reservedMcpServerNames.config,
@@ -157,9 +141,8 @@ export function normalizeCompatibilityConfigValues(
     options.blockedModelIdentities,
   );
   const tuningCandidate = structuredClone(next);
-  if (stripRetiredTuningKnobs(tuningCandidate)) {
+  if (stripRetiredTuningKnobs(tuningCandidate, changes)) {
     next = tuningCandidate;
-    changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
   }
   const channelMigrations = applyChannelDoctorCompatibilityMigrations(next);
   if (channelMigrations.changes.length > 0) {
@@ -174,11 +157,12 @@ export function normalizeCompatibilityConfigValues(
   next = normalizeLegacyOpenAICodexModelsAddMetadata(next, changes);
   next = repairInvalidHeartbeatActiveHours(next, changes);
   next = repairNullAgentWorkspaces(next, changes);
+  next = migrateLegacyCommandOwners(next, changes);
   next = pruneBindingsForMissingAgents(next, changes);
 
   return {
     config: next,
     changes,
-    ...(contextBudgetWarnings.length > 0 ? { warnings: contextBudgetWarnings } : {}),
+    ...(channelMigrations.warnings?.length ? { warnings: channelMigrations.warnings } : {}),
   };
 }

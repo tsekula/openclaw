@@ -1,3 +1,5 @@
+import { webKitHostWindow } from "./native-webkit-bridge.ts";
+
 export type NativeNotificationsPermission = "granted" | "denied" | "notDetermined";
 
 export type NativeNotificationTestOutcome =
@@ -10,22 +12,14 @@ type NativeNotificationsSnapshot = {
   test: NativeNotificationTestOutcome | null;
 };
 
-type NativeNotificationsMessage =
-  | { type: "status" }
-  | { type: "request-permission" }
-  | { type: "send-test" };
-
-type WebKitNotificationsMessageHandler = {
-  postMessage(message: NativeNotificationsMessage): void;
+type NativeBackgroundSessionCompletion = {
+  runId: string;
+  path: string;
+  search?: string;
 };
 
 type NativeNotificationsWindow = Window & {
   __OPENCLAW_NATIVE_NOTIFICATIONS__?: unknown;
-  webkit?: {
-    messageHandlers?: {
-      openclawNotifications?: WebKitNotificationsMessageHandler;
-    };
-  };
 };
 
 // Wire contract with the Mac app's dashboard bridge (DashboardWindowController+Notifications.swift).
@@ -36,6 +30,7 @@ export type NativeNotificationsCapability = {
   subscribe(listener: (snapshot: NativeNotificationsSnapshot) => void): () => void;
   requestPermission(): void;
   sendTest(): void;
+  backgroundSessionCompleted(completion: NativeBackgroundSessionCompletion): void;
   dispose(): void;
 };
 
@@ -50,13 +45,10 @@ function snapshotFrom(value: unknown): NativeNotificationsSnapshot | null {
   if (!isNativeNotificationsPermission(value.permission)) {
     return null;
   }
-  if (!("test" in value)) {
+  if (!("test" in value) || value.test === null) {
     return { permission: value.permission, test: null };
   }
   const test = value.test;
-  if (test === null) {
-    return { permission: value.permission, test: null };
-  }
   if (typeof test !== "object" || test === null || !("state" in test)) {
     return null;
   }
@@ -69,14 +61,8 @@ function snapshotFrom(value: unknown): NativeNotificationsSnapshot | null {
   return null;
 }
 
-function getNativeNotificationsPoster():
-  | WebKitNotificationsMessageHandler["postMessage"]
-  | undefined {
-  if (typeof window === "undefined") {
-    return undefined;
-  }
-  const handler = (window as NativeNotificationsWindow).webkit?.messageHandlers
-    ?.openclawNotifications;
+function getNativeNotificationsPoster() {
+  const handler = webKitHostWindow()?.webkit?.messageHandlers?.openclawNotifications;
   return handler?.postMessage.bind(handler);
 }
 
@@ -129,6 +115,9 @@ export function createNativeNotificationsCapability(): NativeNotificationsCapabi
       }
       publish({ ...snapshot, test: { state: "pending" } });
       postMessage({ type: "send-test" });
+    },
+    backgroundSessionCompleted(completion) {
+      postMessage({ type: "background-session-completed", ...completion });
     },
     dispose() {
       window.removeEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus);

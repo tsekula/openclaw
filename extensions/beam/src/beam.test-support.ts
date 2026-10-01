@@ -8,7 +8,12 @@ import { createBeamMirrorRunner } from "./mirror.js";
 
 export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");
 export const beamTestLogger = { warn: () => {}, info: () => {} };
-export type BeamTestSession = { threadId: string; name?: string; recencyAt: number };
+export type BeamTestSession = {
+  threadId: string;
+  name?: string;
+  modelProvider?: string;
+  recencyAt: number;
+};
 
 export function beamTestMirrorConfig(overrides: Record<string, unknown> = {}) {
   return {
@@ -38,7 +43,6 @@ export function createBeamTestCatalog(
     id?: string;
     sessions?: BeamTestSession[] | (() => BeamTestSession[]);
     items?: SessionCatalogTranscriptItem[] | ((threadId: string) => SessionCatalogTranscriptItem[]);
-    nextCursor?: string;
     hostCursor?: string;
     hostKind?: SessionCatalogHost["kind"];
     onList?: () => unknown;
@@ -65,6 +69,7 @@ export function createBeamTestCatalog(
           sessions: (sessions ?? [{ threadId: "t1", recencyAt: beamTestNow }]).map((session) => ({
             threadId: session.threadId,
             name: session.name,
+            modelProvider: session.modelProvider,
             recencyAt: session.recencyAt,
             status: "stored",
             createdAt: beamTestNow - 60_000,
@@ -87,7 +92,6 @@ export function createBeamTestCatalog(
           { type: "agentMessage", text: "Done." },
           { type: "userMessage", text: "Fix the flow." },
         ],
-        ...(params.nextCursor ? { nextCursor: params.nextCursor } : {}),
       };
     },
   };
